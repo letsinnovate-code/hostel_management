@@ -1,0 +1,29 @@
+{
+    "project_info": {
+        "project_number": "1086726825728",
+        "project_id": "hostelzify",
+        "storage_bucket": "hostelzify.firebasestorage.app"
+    },
+    "client": [
+        {
+            "client_info": {
+                "mobilesdk_app_id": "1:1086726825728:android:00b7921178c8717c6c35e5",
+                "android_client_info": {
+                    "package_name": "com.hostelzify.app"
+                }
+            },
+            "oauth_client": [],
+            "api_key": [
+                {
+                    "current_key": "AIzaSyDQUMuhgwFwIQNi7W41oP_VJ0SYxE4u7J0"
+                }
+            ],
+            "services": {
+                "appinvite_service": {
+                    "other_platform_oauth_client": []
+                }
+            }
+        }
+    ],
+    "configuration_version": "1"
+}
