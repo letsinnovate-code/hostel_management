@@ -2,12 +2,10 @@
 const getApiUrl = () => {
   if (typeof window !== 'undefined') {
     // Client-side: use localhost or environment variable
-    return process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
-    // || 'https://apihostel-zack.vercel.app/api' 
+    return process.env.NEXT_PUBLIC_API_URL;
   }
   // Server-side: use localhost
-  return process.env.API_URL || "http://localhost:4000/api";
-  // || 'https://apihostel-zack.vercel.app/api' 
+  return process.env.API_URL;
 };
 
 export const API_BASE_URL = getApiUrl();
