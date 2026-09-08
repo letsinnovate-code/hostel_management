@@ -20,13 +20,13 @@ export default function CTA() {
 
                     <div className="flex flex-col sm:flex-row gap-6 justify-center relative z-10">
                         <Link
-                            href="/signup?role=student"
+                            href="/register?role=student"
                             className="px-12 py-5 bg-white text-blue-600 rounded-2xl font-black text-lg hover:bg-gray-50 transition-all shadow-xl hover:-translate-y-1 active:scale-95"
                         >
                             Get Started
                         </Link>
                         <Link
-                            href="/signup?role=owner"
+                            href="/register?role=owner"
                             className="px-12 py-5 bg-blue-800/40 text-white rounded-2xl font-black text-lg hover:bg-blue-800/60 transition-all border border-white/10 backdrop-blur-sm hover:-translate-y-1 active:scale-95"
                         >
                             List Your Property

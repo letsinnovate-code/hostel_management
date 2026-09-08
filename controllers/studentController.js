@@ -1416,7 +1416,14 @@ exports.updateLocation = async (req, res) => {
       });
     }
 
-    const hostelId = req.user.hostelId;
+    const hostelId = req.user?.hostelId || req.user?.hostel;
+    if (!hostelId) {
+      return res.status(200).json({
+        success: true,
+        tracking: false,
+        message: 'Student is not assigned to a hostel yet',
+      });
+    }
 
     // Parallel fetch: hostel + active geo-fence
     const [hostel, geoFence] = await Promise.all([
@@ -1425,7 +1432,11 @@ exports.updateLocation = async (req, res) => {
     ]);
 
     if (!hostel) {
-      return res.status(404).json({ success: false, code: 'HOSTEL_NOT_FOUND', message: 'Hostel not found' });
+      return res.status(200).json({
+        success: true,
+        tracking: false,
+        message: 'Hostel not found',
+      });
     }
 
     // Geofence containment evaluation
@@ -1776,11 +1787,27 @@ exports.getHostelBoundary = async (req, res) => {
   try {
     const hostelId = req.user?.hostelId ?? req.user?.hostel;
     if (!hostelId) {
-      return res.status(404).json({ success: false, message: 'You are not assigned to a hostel' });
+      return res.status(200).json({
+        success: true,
+        data: {
+          hostel: null,
+          geoFence: null,
+          isAssigned: false,
+          message: 'You are not assigned to a hostel yet',
+        },
+      });
     }
     const hostel = await Hostel.findById(hostelId).select('name address');
     if (!hostel) {
-      return res.status(404).json({ success: false, message: 'Hostel not found' });
+      return res.status(200).json({
+        success: true,
+        data: {
+          hostel: null,
+          geoFence: null,
+          isAssigned: false,
+          message: 'Hostel not found',
+        },
+      });
     }
     const geoFence = await GeoFence.findOne({ hostelId, isActive: true }).sort({ createdAt: -1 });
     const hostelLocation = hostel.address?.coordinates?.latitude != null && hostel.address?.coordinates?.longitude != null

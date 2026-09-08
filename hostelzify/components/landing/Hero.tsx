@@ -51,7 +51,7 @@ export default function Hero() {
                                 Find Hostels
                             </Link>
                             <Link
-                                href="/signup?role=owner"
+                                href="/register?role=owner"
                                 className="w-full sm:w-auto px-10 py-4.5 bg-white border border-gray-200 text-slate-900 rounded-2xl font-bold hover:bg-gray-50 transition-all flex items-center justify-center gap-2 shadow-sm hover:-translate-y-1"
                             >
                                 <Building2 className="w-5 h-5 text-gray-400" />

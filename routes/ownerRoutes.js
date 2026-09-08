@@ -122,8 +122,13 @@ const multer = require('multer');
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// All routes require authentication and owner or superadmin role
+// All routes require authentication
 router.use(protect);
+
+// Routes accessible by owner, superadmin, and warden
+router.get('/students/with-attendance', authorize('owner', 'warden', 'superadmin'), getStudentsWithAttendance);
+
+// Remaining routes require owner or superadmin role
 router.use(authorize('owner', 'superadmin'));
 
 // Hostel Configuration
@@ -272,7 +277,6 @@ router.get('/attendance/daily', getDailyAttendance);
 router.get('/gate-logs', getGateLogs);
 router.get('/students/locations', getStudentLocations);
 router.get('/students/location-permissions', getLocationPermissionStatus);
-router.get('/students/with-attendance', getStudentsWithAttendance);
 
 // Marketplace - Enquiries & Callbacks
 router.get('/enquiries', getEnquiries);

@@ -52,7 +52,7 @@ export default function StudentDashboardMap({
     if (typeof window !== 'undefined' && !(window as any).google) {
       const script = document.createElement('script');
       const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}`;
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry`;
       script.async = true;
       script.defer = true;
       script.onload = () => setIsLoaded(true);

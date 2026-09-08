@@ -90,70 +90,112 @@ export default function AddressInput({
     return parsed;
   };
 
-  // Load Google Maps script
+  // Load Google Maps script or Places library
   useEffect(() => {
-    if (typeof window !== 'undefined' && !(window as any).google) {
-      const script = document.createElement('script');
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+    if (typeof window === 'undefined') return;
+
+    const checkPlacesLoaded = () => {
+      const g = (window as any).google;
+      return !!(g && g.maps && g.maps.places && g.maps.places.Autocomplete);
+    };
+
+    if (checkPlacesLoaded()) {
+      setIsLoaded(true);
+      return;
+    }
+
+    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
+    const scriptId = 'google-maps-places-script';
+
+    // If Google is loaded but missing places library, try modern dynamic import
+    const g = (window as any).google;
+    if (g && g.maps && typeof g.maps.importLibrary === 'function') {
+      g.maps.importLibrary('places').then(() => {
+        setIsLoaded(true);
+      }).catch(() => {});
+    }
+
+    // Check if script element already exists
+    let script = document.getElementById(scriptId) as HTMLScriptElement;
+    if (!script && !((window as any).google?.maps?.places)) {
+      script = document.createElement('script');
+      script.id = scriptId;
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry`;
       script.async = true;
       script.defer = true;
-      script.onload = () => setIsLoaded(true);
-      script.onerror = () => {
-        console.error('Failed to load Google Maps script');
-        setIsLoaded(false);
+      script.onload = () => {
+        if (checkPlacesLoaded()) setIsLoaded(true);
       };
       document.head.appendChild(script);
-    } else if ((window as any).google) {
-      setIsLoaded(true);
     }
+
+    const interval = setInterval(() => {
+      if (checkPlacesLoaded()) {
+        setIsLoaded(true);
+        clearInterval(interval);
+      }
+    }, 200);
+
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+    }, 10000);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
   }, []);
 
   // Initialize Autocomplete
   useEffect(() => {
-    if (!isLoaded || !inputRef.current || !(window as any).google) return;
-
+    if (!isLoaded || !inputRef.current) return;
     const google = (window as any).google;
-    const autocomplete = new google.maps.places.Autocomplete(inputRef.current, {
-      types: ['address'],
-      componentRestrictions: { country: 'in' },
-    });
+    if (!google?.maps?.places?.Autocomplete) return;
 
-    autocompleteRef.current = autocomplete;
+    try {
+      const autocomplete = new google.maps.places.Autocomplete(inputRef.current, {
+        types: ['address'],
+        componentRestrictions: { country: 'in' },
+      });
 
-    autocomplete.addListener('place_changed', () => {
-      const place = autocomplete.getPlace();
+      autocompleteRef.current = autocomplete;
 
-      if (!place.geometry || !place.geometry.location) {
-        console.error('No details available for the selected place');
-        return;
-      }
+      autocomplete.addListener('place_changed', () => {
+        const place = autocomplete.getPlace();
 
-      const lat = place.geometry.location.lat();
-      const lng = place.geometry.location.lng();
-      const formattedAddress = place.formatted_address || place.name || '';
-      const placeId = place.place_id || '';
+        if (!place.geometry || !place.geometry.location) {
+          console.error('No details available for the selected place');
+          return;
+        }
 
-      // Parse address components
-      const components = place.address_components || [];
-      const parsedComponents = parseAddressComponents(components);
+        const lat = place.geometry.location.lat();
+        const lng = place.geometry.location.lng();
+        const formattedAddress = place.formatted_address || place.name || '';
+        const placeId = place.place_id || '';
 
-      setSearchQuery(formattedAddress);
-      setMapCenter({ lat, lng });
-      setMarkerPosition({ lat, lng });
-      setSelectedAddress(formattedAddress);
-      setSelectedPlaceId(placeId);
-      setAddressComponents(parsedComponents);
+        // Parse address components
+        const components = place.address_components || [];
+        const parsedComponents = parseAddressComponents(components);
 
-      // Pass address components to parent
-      if (onAddressComponents) {
-        onAddressComponents(parsedComponents);
-      }
-    });
+        setSearchQuery(formattedAddress);
+        setMapCenter({ lat, lng });
+        setMarkerPosition({ lat, lng });
+        setSelectedAddress(formattedAddress);
+        setSelectedPlaceId(placeId);
+        setAddressComponents(parsedComponents);
+
+        // Pass address components to parent
+        if (onAddressComponents) {
+          onAddressComponents(parsedComponents);
+        }
+      });
+    } catch (err) {
+      console.warn('Autocomplete init error:', err);
+    }
 
     return () => {
-      if (autocompleteRef.current) {
-        google.maps.event.clearInstanceListeners(autocompleteRef.current);
+      if (autocompleteRef.current && (window as any).google?.maps?.event) {
+        (window as any).google.maps.event.clearInstanceListeners(autocompleteRef.current);
       }
     };
   }, [isLoaded]);

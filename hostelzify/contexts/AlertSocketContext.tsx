@@ -65,7 +65,22 @@ const priorityToast = (priority: string) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Provider
 // ─────────────────────────────────────────────────────────────────────────────
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') ?? 'http://localhost:4000';
+const getSocketEndpoint = (): string | null => {
+  // If explicitly configured with a dedicated socket server (e.g. Render/Railway), use it
+  if (process.env.NEXT_PUBLIC_SOCKET_URL && process.env.NEXT_PUBLIC_SOCKET_URL.trim()) {
+    return process.env.NEXT_PUBLIC_SOCKET_URL.trim().replace(/\/+$/, '');
+  }
+
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+  const isVercelServerless = apiUrl.includes('.vercel.app');
+
+  // Vercel Serverless functions do not support persistent WebSockets
+  if (isVercelServerless) {
+    return null;
+  }
+
+  return apiUrl.replace(/\/api\/?$/, '') || 'http://localhost:4000';
+};
 
 export function AlertSocketProvider({ children }: { children: ReactNode }) {
   const socketRef = useRef<Socket | null>(null);
@@ -87,11 +102,20 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
 
     if (!token) return;
 
-    const socket = io(BACKEND_URL, {
+    const socketEndpoint = getSocketEndpoint();
+    if (!socketEndpoint) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.info('[AlertSocket] Live WebSocket connection skipped: backend is running on Vercel Serverless. To enable persistent real-time alerts, set NEXT_PUBLIC_SOCKET_URL to point to a persistent server (e.g. Render/Railway).');
+      }
+      return;
+    }
+
+    const socket = io(socketEndpoint, {
       auth: { token },
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
-      reconnectionDelay: 2000,
+      transports: ['polling', 'websocket'],
+      reconnectionAttempts: 3,
+      reconnectionDelay: 3000,
+      timeout: 10000,
     });
 
     socketRef.current = socket;
@@ -100,6 +124,12 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
     socket.on('connect', () => {
       setConnected(true);
       console.log('[AlertSocket] Connected', socket.id);
+    });
+
+    socket.on('connect_error', (err) => {
+      setConnected(false);
+      // Suppress unhandled connection crash
+      console.warn('[AlertSocket] Connection issue:', err.message);
     });
 
     socket.on('disconnect', (reason) => {

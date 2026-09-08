@@ -18,6 +18,10 @@ async function getOwnerHostelIds(req) {
     const allHostels = await Hostel.find({}).select('_id').lean();
     return allHostels.map((h) => h._id);
   }
+  if (req.user?.role === 'warden') {
+    const wardenHostelId = req.user?.hostelId || req.user?.hostel;
+    return wardenHostelId ? [wardenHostelId] : [];
+  }
   const ownerId = req.user?._id || req.user?.id;
   if (!ownerId) return [];
   const hostels = await Hostel.find({ ownerId }).select('_id').lean();
@@ -25,7 +29,7 @@ async function getOwnerHostelIds(req) {
 }
 
 /**
- * Validates that a given hostelId belongs to the authenticated owner.
+ * Validates that a given hostelId belongs to the authenticated owner (or warden's hostel).
  * Returns the hostel if valid, throws 403/404 error object if not.
  * If user is superadmin, allows access.
  */
@@ -43,6 +47,15 @@ async function assertOwnsHostel(req, hostelId) {
   }
   if (req.user?.role === 'superadmin') {
     return hostel;
+  }
+  if (req.user?.role === 'warden') {
+    const wardenHostelId = req.user?.hostelId || req.user?.hostel;
+    if (String(wardenHostelId) === String(hostelId)) {
+      return hostel;
+    }
+    const err = new Error('Not authorized to access this hostel');
+    err.statusCode = 403;
+    throw err;
   }
   const ownerId = req.user?._id || req.user?.id;
   if (String(hostel.ownerId) !== String(ownerId)) {

@@ -304,6 +304,7 @@ exports.uploadHostelImages = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Hostel not found' });
     }
     const isSuperAdmin = req.user?.role === 'superadmin';
+    const ownerId = req.user?._id || req.user?.id;
     if (!isSuperAdmin && String(hostel.ownerId) !== String(ownerId)) {
       return res.status(403).json({ success: false, message: 'Not authorized to modify this hostel' });
     }
@@ -344,6 +345,7 @@ exports.deleteHostelImage = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Hostel not found' });
     }
     const isSuperAdmin = req.user?.role === 'superadmin';
+    const ownerId = req.user?._id || req.user?.id;
     if (!isSuperAdmin && String(hostel.ownerId) !== String(ownerId)) {
       return res.status(403).json({ success: false, message: 'Not authorized to modify this hostel' });
     }
@@ -3546,8 +3548,14 @@ exports.getStudentLocations = async (req, res) => {
 exports.getStudentsWithAttendance = async (req, res) => {
   try {
     const { hostelId } = req.query;
-    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
-    if (scopedHostelIds.length === 0) {
+    let scopedHostelIds = [];
+    try {
+      scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    } catch (_) {
+      // If hostel not found or not owned, return empty array gracefully
+      return res.status(200).json({ success: true, data: [] });
+    }
+    if (!scopedHostelIds || scopedHostelIds.length === 0) {
       return res.status(200).json({ success: true, data: [] });
     }
     const query = { role: 'student', hostelId: { $in: scopedHostelIds } };

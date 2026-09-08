@@ -24,13 +24,15 @@ const {
   getActiveEmergencies,
   acknowledgeEmergency,
 } = require('../controllers/wardenController');
+const { getStudentsWithAttendance } = require('../controllers/ownerController');
 const { protect, authorize } = require('../middleware/auth');
 
 router.use(protect);
 router.use(authorize('warden', 'owner'));
 
-// Dashboard
+// Dashboard & Students
 router.get('/dashboard', getDashboard);
+router.get('/students/with-attendance', getStudentsWithAttendance);
 
 // Curfew Monitoring
 router.get('/curfew/violations', getCurfewViolations);
