@@ -22,6 +22,23 @@ const registerLimiter = rateLimit({
   message: { success: false, message: 'Too many registration requests from this IP. Please try again later.' }
 });
 
+// Informative GET handlers for browser visitors (prevents 404 confusion)
+router.get('/register', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Hostelzify User Registration API Endpoint. This endpoint accepts POST requests with JSON payload: { name, email, password, phone, role }.',
+    hint: 'To register via the user interface, open the frontend registration page (/register).',
+  });
+});
+
+router.get('/login', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Hostelzify User Login API Endpoint. This endpoint accepts POST requests with JSON payload: { email, password }.',
+    hint: 'To log in via the user interface, open the frontend login page (/login).',
+  });
+});
+
 router.post('/register', registerLimiter, register);
 router.post('/login', loginLimiter, login);
 router.get('/me', protect, getMe);

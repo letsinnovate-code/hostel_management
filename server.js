@@ -57,22 +57,41 @@ app.use(helmet({
 }));
 
 // CORS Configuration
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
-  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:4000'];
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(o => o.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
 
-app.use(cors({
+const isOriginAllowed = (origin) => {
+  if (!origin) return true; // Mobile apps, Postman, curl, direct navigation
+  if (process.env.NODE_ENV !== 'production') return true;
+  if (allowedOrigins.includes('*')) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  // Allow any localhost/127.0.0.1 port
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+  // Allow all Vercel deployment preview and production domains
+  try {
+    const hostname = new URL(origin).hostname;
+    if (hostname.endsWith('.vercel.app')) return true;
+  } catch (_) {}
+  return false;
+};
+
+const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+    if (isOriginAllowed(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(null, false);
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-}));
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Middleware
 app.use(express.json({ limit: '10mb' }));
@@ -90,7 +109,7 @@ app.use('/api/', apiLimiter);
 
 // Database connection & environment validation middleware (handles Serverless cold starts)
 app.use(async (req, res, next) => {
-  if (req.path === '/' || req.path === '/api/health' || req.path === '/favicon.ico') {
+  if (req.method === 'OPTIONS' || req.path === '/' || req.path === '/api/health' || req.path === '/favicon.ico') {
     return next();
   }
 
