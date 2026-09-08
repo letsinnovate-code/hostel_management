@@ -9,6 +9,7 @@ import {
   ShieldAlert,
   FileCheck2,
   AlertTriangle,
+  Users,
   LogOut,
   X,
 } from 'lucide-react';
@@ -33,6 +34,11 @@ export default function WardenSidebar({ isOpen, onClose }: WardenSidebarProps) {
       label: 'Dashboard',
       href: '/warden/dashboard',
       icon: LayoutDashboard,
+    },
+    {
+      label: 'Students',
+      href: '/warden/students',
+      icon: Users,
     },
     {
       label: 'Curfew & Alerts',

@@ -7,6 +7,16 @@ const {
   verifyPresence,
   markAttendance,
   getHostelStudents,
+  getStudentsList,
+  getStudentDetails,
+  getWardenRooms,
+  getUnassignedStudents,
+  assignBed,
+  transferBed,
+  vacateBed,
+  updateRoomStatus,
+  reportRoomProblem,
+  getRoomAllocationHistory,
   getPendingPermissions,
   approvePermission,
   rejectPermission,
@@ -41,7 +51,19 @@ router.use(authorize('warden', 'owner'));
 // Dashboard & Students
 router.get('/dashboard', getDashboard);
 router.get('/students', getHostelStudents);
+router.get('/students/list', getStudentsList);
 router.get('/students/with-attendance', getStudentsWithAttendance);
+router.get('/students/:id', getStudentDetails);
+
+// Room & Bed Management
+router.get('/rooms', getWardenRooms);
+router.get('/rooms/unassigned-students', getUnassignedStudents);
+router.get('/rooms/allocation-history', getRoomAllocationHistory);
+router.post('/rooms/:roomId/assign', assignBed);
+router.post('/rooms/transfer', transferBed);
+router.post('/rooms/:roomId/vacate', vacateBed);
+router.put('/rooms/:roomId/status', updateRoomStatus);
+router.post('/rooms/:roomId/report-problem', reportRoomProblem);
 
 // Curfew Monitoring
 router.get('/curfew/violations', getCurfewViolations);

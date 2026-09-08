@@ -646,6 +646,93 @@ class ApiService {
     return response.data;
   }
 
+  async getWardenStudentsList(params?: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    room?: string;
+    floor?: string | number;
+    course?: string;
+    year?: string | number;
+    status?: string;
+    gender?: string;
+    sortBy?: string;
+    sortOrder?: string;
+    hostelId?: string;
+  }) {
+    const response = await this.api.get('/warden/students/list', { params });
+    return response.data;
+  }
+
+  async getWardenStudentDetails(studentId: string, params?: { hostelId?: string }) {
+    const response = await this.api.get(`/warden/students/${studentId}`, { params });
+    return response.data;
+  }
+
+  // Room & Bed Management APIs
+  async getWardenRooms(params?: {
+    floor?: number | string;
+    block?: string;
+    status?: string;
+    category?: string;
+    search?: string;
+    hostelId?: string;
+  }) {
+    const response = await this.api.get('/warden/rooms', { params });
+    return response.data;
+  }
+
+  async getWardenUnassignedStudents(params?: { hostelId?: string }) {
+    const response = await this.api.get('/warden/rooms/unassigned-students', { params });
+    return response.data;
+  }
+
+  async assignWardenBed(roomId: string, data: { studentId: string; reason?: string }) {
+    const response = await this.api.post(`/warden/rooms/${roomId}/assign`, data);
+    return response.data;
+  }
+
+  async transferWardenBed(data: {
+    studentId: string;
+    fromRoomId: string;
+    toRoomId: string;
+    reason?: string;
+  }) {
+    const response = await this.api.post('/warden/rooms/transfer', data);
+    return response.data;
+  }
+
+  async vacateWardenBed(roomId: string, data: { studentId: string; reason?: string }) {
+    const response = await this.api.post(`/warden/rooms/${roomId}/vacate`, data);
+    return response.data;
+  }
+
+  async updateWardenRoomStatus(roomId: string, data: { status: string; reason?: string }) {
+    const response = await this.api.put(`/warden/rooms/${roomId}/status`, data);
+    return response.data;
+  }
+
+  async reportWardenRoomProblem(roomId: string, data: {
+    title: string;
+    description: string;
+    priority?: string;
+    complaintType?: string;
+  }) {
+    const response = await this.api.post(`/warden/rooms/${roomId}/report-problem`, data);
+    return response.data;
+  }
+
+  async getWardenRoomAllocationHistory(params?: {
+    roomId?: string;
+    studentId?: string;
+    page?: number;
+    limit?: number;
+    hostelId?: string;
+  }) {
+    const response = await this.api.get('/warden/rooms/allocation-history', { params });
+    return response.data;
+  }
+
   async createWardenVisitor(data: {
     visitorName: string;
     visitorPhone: string;

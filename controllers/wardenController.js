@@ -7,6 +7,8 @@ const Visitor = require('../models/Visitor');
 const Emergency = require('../models/Emergency');
 const Rule = require('../models/Rule');
 const Room = require('../models/Room');
+const GateEvent = require('../models/GateEvent');
+const RoomAllocationHistory = require('../models/RoomAllocationHistory');
 const LeaveViolation = require('../modules/alert/models/LeaveViolation');
 const mongoose = require('mongoose');
 const { getBusinessDate, getBusinessDateString } = require('../services/timezoneService');
@@ -1519,5 +1521,975 @@ exports.updateComplaintStatus = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// ============ STUDENT MANAGEMENT MODULE ============
+
+// Get Paginated, Searchable & Filterable Students List
+exports.getStudentsList = async (req, res) => {
+  try {
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          students: [],
+          pagination: { total: 0, page: 1, limit: 10, totalPages: 0 },
+          facets: { rooms: [], floors: [], courses: [], years: [] },
+          metrics: { total: 0, active: 0, onLeave: 0, suspended: 0, exited: 0 },
+        },
+      });
+    }
+
+    const {
+      page = 1,
+      limit = 10,
+      search = '',
+      room = '',
+      floor = '',
+      course = '',
+      year = '',
+      status = 'all',
+      gender = 'all',
+      sortBy = 'name',
+      sortOrder = 'asc',
+    } = req.query;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
+
+    // Base filter: All students belonging to this hostel
+    const filter = {
+      hostelId: targetHostelId,
+      role: 'student',
+    };
+
+    if (status && status !== 'all') {
+      filter.status = status;
+    }
+
+    if (gender && gender !== 'all') {
+      filter.gender = gender;
+    }
+
+    if (course && course !== 'all') {
+      const escapedCourse = course.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.course = { $regex: escapedCourse, $options: 'i' };
+    }
+
+    if (year && year !== 'all') {
+      filter.year = String(year).trim();
+    }
+
+    // Room / Floor sub-query filtering
+    if (room || floor) {
+      const roomQuery = { hostelId: targetHostelId };
+      if (room && room !== 'all') {
+        if (mongoose.isValidObjectId(room)) {
+          roomQuery._id = room;
+        } else {
+          const escapedRoom = room.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          roomQuery.roomNumber = { $regex: escapedRoom, $options: 'i' };
+        }
+      }
+      if (floor && floor !== 'all') {
+        roomQuery.floorNumber = Number(floor);
+      }
+      const roomsFound = await Room.find(roomQuery).select('_id').lean();
+      const matchingRoomIds = roomsFound.map((r) => r._id);
+      filter.roomId = { $in: matchingRoomIds };
+    }
+
+    // Search filter across name, studentId, email, phone, and roomNumber
+    if (search && search.trim()) {
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escaped, 'i');
+
+      const searchRooms = await Room.find({
+        hostelId: targetHostelId,
+        roomNumber: searchRegex,
+      }).select('_id').lean();
+      const searchRoomIds = searchRooms.map((r) => r._id);
+
+      const orConditions = [
+        { name: searchRegex },
+        { studentId: searchRegex },
+        { email: searchRegex },
+        { phone: searchRegex },
+      ];
+      if (searchRoomIds.length > 0) {
+        orConditions.push({ roomId: { $in: searchRoomIds } });
+      }
+
+      if (filter.$and) {
+        filter.$and.push({ $or: orConditions });
+      } else {
+        filter.$or = orConditions;
+      }
+    }
+
+    // Sorting
+    const sortFieldMap = {
+      name: 'name',
+      studentId: 'studentId',
+      status: 'status',
+      createdAt: 'createdAt',
+      joinedDate: 'createdAt',
+    };
+    const sortFieldName = sortFieldMap[sortBy] || 'name';
+    const sortDirection = sortOrder === 'desc' ? -1 : 1;
+    const sortObj = { [sortFieldName]: sortDirection };
+
+    // Execute query and total count
+    const [total, students] = await Promise.all([
+      User.countDocuments(filter),
+      User.find(filter)
+        .populate('roomId', 'roomNumber floorNumber capacity currentOccupancy category')
+        .populate('blockId', 'name')
+        .select('name email phone studentId status gender course year roomId blockId hostelId parentContact profileImage createdAt')
+        .sort(sortObj)
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .lean(),
+    ]);
+
+    // Query live presence from Attendance for this batch of students
+    const studentIds = students.map((s) => s._id);
+    const todayAttendance = await Attendance.aggregate([
+      { $match: { studentId: { $in: studentIds } } },
+      { $sort: { date: -1, createdAt: -1 } },
+      { $group: { _id: '$studentId', doc: { $first: '$$ROOT' } } },
+      { $replaceRoot: { newRoot: '$doc' } },
+    ]);
+
+    const attMap = {};
+    todayAttendance.forEach((att) => {
+      attMap[String(att.studentId)] = att;
+    });
+
+    const studentsWithPresence = students.map((s) => {
+      const att = attMap[String(s._id)];
+      let presenceStatus = 'unknown';
+      if (s.status === 'on-leave') {
+        presenceStatus = 'on-leave';
+      } else if (att) {
+        presenceStatus = att.status === 'inside' ? 'inside' : att.status === 'outside' ? 'outside' : att.status === 'on-leave' ? 'on-leave' : 'unknown';
+      }
+      return {
+        ...s,
+        presenceStatus,
+        lastCheckIn: att?.checkInTime || null,
+        lastCheckOut: att?.checkOutTime || null,
+      };
+    });
+
+    // Compute metrics across all students in this hostel
+    const [allStudentsInHostel, allRoomsInHostel] = await Promise.all([
+      User.find({ hostelId: targetHostelId, role: 'student' }).select('status gender course year').lean(),
+      Room.find({ hostelId: targetHostelId }).select('roomNumber floorNumber').sort({ roomNumber: 1 }).lean(),
+    ]);
+
+    const metrics = {
+      total: allStudentsInHostel.length,
+      active: allStudentsInHostel.filter((s) => s.status === 'active' || !s.status).length,
+      onLeave: allStudentsInHostel.filter((s) => s.status === 'on-leave').length,
+      suspended: allStudentsInHostel.filter((s) => s.status === 'suspended').length,
+      exited: allStudentsInHostel.filter((s) => s.status === 'exited').length,
+    };
+
+    // Extract unique filter facets
+    const uniqueFloors = Array.from(new Set(allRoomsInHostel.map((r) => r.floorNumber).filter((f) => f != null))).sort((a, b) => a - b);
+    const uniqueRooms = allRoomsInHostel.map((r) => ({ _id: String(r._id), roomNumber: r.roomNumber, floorNumber: r.floorNumber }));
+    const uniqueCourses = Array.from(new Set(allStudentsInHostel.map((s) => s.course).filter((c) => !!c && String(c).trim()))).sort();
+    const uniqueYears = Array.from(new Set(allStudentsInHostel.map((s) => s.year).filter((y) => !!y && String(y).trim()))).sort();
+
+    res.status(200).json({
+      success: true,
+      data: {
+        students: studentsWithPresence,
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum) || 1,
+        },
+        facets: {
+          rooms: uniqueRooms,
+          floors: uniqueFloors,
+          courses: uniqueCourses,
+          years: uniqueYears,
+        },
+        metrics,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching warden students list:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Get Full Student Detail (Profile, Room/Bed, Attendance, Leaves, Complaints, Discipline, Visitors, Gate events)
+exports.getStudentDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id || !mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid student ID format' });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(403).json({ success: false, message: 'No hostel assigned to your profile' });
+    }
+
+    // Find student strictly in target hostel
+    const student = await User.findOne({
+      _id: id,
+      role: 'student',
+      hostelId: targetHostelId,
+    })
+      .populate('hostelId', 'name address contactNumber rules')
+      .populate('blockId', 'name')
+      .populate({
+        path: 'roomId',
+        select: 'roomNumber floorNumber capacity currentOccupancy category pricing amenities students description',
+        populate: {
+          path: 'students',
+          select: 'name studentId phone status profileImage',
+        },
+      })
+      .select('-password -__v')
+      .lean();
+
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found in your assigned hostel' });
+    }
+
+    // Parallel fetch of all related records for this student
+    const [
+      attendanceRecords,
+      permissions,
+      complaints,
+      violations,
+      curfewViolations,
+      visitors,
+      gateEvents,
+    ] = await Promise.all([
+      Attendance.find({ studentId: id }).sort({ date: -1, createdAt: -1 }).limit(60).lean(),
+      Permission.find({ studentId: id }).populate('approvedBy', 'name role').sort({ createdAt: -1 }).lean(),
+      Complaint.find({ raisedBy: id }).populate('assignedTo', 'name role').sort({ createdAt: -1 }).lean(),
+      Violation.find({ studentId: id }).populate('reportedBy', 'name role').sort({ createdAt: -1 }).lean(),
+      CurfewViolation.find({ studentId: id }).sort({ createdAt: -1 }).lean(),
+      Visitor.find({ visitingStudentId: id }).populate('approvedBy', 'name role').sort({ createdAt: -1 }).lean(),
+      GateEvent.find({ studentId: id, hostelId: targetHostelId }).sort({ time: -1 }).limit(50).lean(),
+    ]);
+
+    // Attendance summary calculation
+    const totalDaysTracked = attendanceRecords.length;
+    const daysInside = attendanceRecords.filter((a) => a.status === 'inside').length;
+    const daysOutside = attendanceRecords.filter((a) => a.status === 'outside').length;
+    const daysOnLeave = attendanceRecords.filter((a) => a.status === 'on-leave').length;
+    const attendancePercentage = totalDaysTracked > 0 ? Math.round((daysInside / totalDaysTracked) * 100) : 100;
+    const totalMinutesInside = attendanceRecords.reduce((acc, curr) => acc + (curr.totalMinutesInside || 0), 0);
+    const totalHoursInside = Math.round(totalMinutesInside / 60);
+
+    const latestAttendance = attendanceRecords[0] || null;
+    let livePresenceStatus = 'unknown';
+    if (student.status === 'on-leave') {
+      livePresenceStatus = 'on-leave';
+    } else if (latestAttendance) {
+      livePresenceStatus = latestAttendance.status === 'inside' ? 'inside' : latestAttendance.status === 'outside' ? 'outside' : latestAttendance.status === 'on-leave' ? 'on-leave' : 'unknown';
+    }
+
+    // Leave summary
+    const leaveSummary = {
+      total: permissions.length,
+      approved: permissions.filter((p) => p.status === 'approved').length,
+      pending: permissions.filter((p) => p.status === 'pending').length,
+      rejected: permissions.filter((p) => p.status === 'rejected').length,
+      history: permissions,
+    };
+
+    // Disciplinary summary
+    const allDisciplinary = [
+      ...violations.map((v) => ({ ...v, recordType: 'violation' })),
+      ...curfewViolations.map((cv) => ({
+        _id: cv._id,
+        violationType: 'curfew',
+        description: `Curfew breached at ${cv.curfewTime || 'curfew'}. Delay: ${cv.minutesLate || 0} mins`,
+        status: cv.status || 'pending',
+        warningLevel: cv.warningLevel || 'warning',
+        fineAmount: cv.fineAmount || 0,
+        createdAt: cv.createdAt,
+        recordType: 'curfew_violation',
+      })),
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    const totalFines = allDisciplinary.reduce((sum, item) => sum + (item.fineAmount || 0), 0);
+
+    // Complaint summary
+    const complaintSummary = {
+      total: complaints.length,
+      resolved: complaints.filter((c) => c.status === 'resolved' || c.status === 'closed').length,
+      pending: complaints.filter((c) => c.status === 'open' || c.status === 'assigned' || c.status === 'in-progress').length,
+      history: complaints,
+    };
+
+    // Roommates info (exclude this student)
+    const roommates = (student.roomId?.students || []).filter(
+      (roommate) => String(roommate._id) !== String(student._id)
+    );
+
+    // Redact sensitive / admin-only fields
+    const { password, pushToken, expoPushToken, ...sanitizedStudent } = student;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        student: sanitizedStudent,
+        roommates,
+        livePresence: {
+          status: livePresenceStatus,
+          lastCheckIn: latestAttendance?.checkInTime || null,
+          lastCheckOut: latestAttendance?.checkOutTime || null,
+          lastBusinessDate: latestAttendance?.businessDate || null,
+        },
+        attendanceSummary: {
+          totalDaysTracked,
+          daysInside,
+          daysOutside,
+          daysOnLeave,
+          attendancePercentage,
+          totalHoursInside,
+          recentRecords: attendanceRecords.slice(0, 30),
+        },
+        leaveSummary,
+        complaintSummary,
+        disciplinarySummary: {
+          total: allDisciplinary.length,
+          totalFines,
+          history: allDisciplinary,
+        },
+        visitorHistory: visitors,
+        gateEvents,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching warden student details:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ============ ROOM & BED MANAGEMENT MODULE ============
+
+// Get all rooms for Warden's hostel with occupied/vacant metrics and students
+exports.getWardenRooms = async (req, res) => {
+  try {
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          rooms: [],
+          floors: [],
+          blocks: [],
+          metrics: {
+            totalRooms: 0,
+            totalBeds: 0,
+            occupiedBeds: 0,
+            vacantBeds: 0,
+            occupancyRate: 0,
+            maintenanceRooms: 0,
+          },
+        },
+      });
+    }
+
+    const { floor, block, status, category, search } = req.query;
+
+    const filter = { hostelId: targetHostelId };
+
+    if (floor && floor !== 'all') {
+      filter.floorNumber = Number(floor);
+    }
+    if (block && block !== 'all') {
+      filter.blockId = block;
+    }
+    if (status && status !== 'all') {
+      filter.status = status;
+    }
+    if (category && category !== 'all') {
+      filter.category = category;
+    }
+
+    if (search && search.trim()) {
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.roomNumber = { $regex: escaped, $options: 'i' };
+    }
+
+    let rooms = await Room.find(filter)
+      .populate('blockId', 'name')
+      .populate('hostelId', 'name')
+      .populate({
+        path: 'students',
+        select: 'name studentId phone email gender course year status profileImage',
+      })
+      .sort({ floorNumber: 1, roomNumber: 1 })
+      .lean();
+
+    // Fallback sync: If room.students is empty but Users have this roomId, keep synchronized
+    for (let r of rooms) {
+      if (!r.students || r.students.length === 0) {
+        const activeResidents = await User.find({
+          roomId: r._id,
+          role: 'student',
+          status: { $in: ['active', 'on-leave'] },
+        })
+          .select('name studentId phone email gender course year status profileImage')
+          .lean();
+
+        if (activeResidents.length > 0) {
+          r.students = activeResidents;
+          Room.updateOne({ _id: r._id }, {
+            students: activeResidents.map(s => s._id),
+            currentOccupancy: activeResidents.length,
+            status: activeResidents.length >= r.capacity ? 'occupied' : (r.status === 'maintenance' || r.status === 'unavailable' ? r.status : 'available'),
+          }).exec().catch(() => {});
+        }
+      }
+
+      // Calculate available beds safely
+      const occupied = r.students ? r.students.length : (r.currentOccupancy || 0);
+      r.currentOccupancy = occupied;
+      r.availableBeds = Math.max(0, (r.capacity || 0) - occupied);
+    }
+
+    // Compute hostel-wide metrics
+    const allHostelRooms = await Room.find({ hostelId: targetHostelId })
+      .populate('students', '_id')
+      .lean();
+
+    let totalBeds = 0;
+    let occupiedBeds = 0;
+    let maintenanceRooms = 0;
+    const floorSet = new Set();
+    const blockMap = new Map();
+
+    allHostelRooms.forEach((r) => {
+      if (r.floorNumber != null) floorSet.add(r.floorNumber);
+      if (r.blockId) {
+        const bId = String(r.blockId._id || r.blockId);
+        blockMap.set(bId, r.blockId.name || 'Block');
+      }
+      const cap = r.capacity || 0;
+      const occ = r.students ? r.students.length : (r.currentOccupancy || 0);
+      totalBeds += cap;
+      occupiedBeds += occ;
+      if (r.status === 'maintenance' || r.status === 'unavailable') {
+        maintenanceRooms += 1;
+      }
+    });
+
+    const vacantBeds = Math.max(0, totalBeds - occupiedBeds);
+    const occupancyRate = totalBeds > 0 ? Math.round((occupiedBeds / totalBeds) * 100) : 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        rooms,
+        floors: Array.from(floorSet).sort((a, b) => a - b),
+        blocks: Array.from(blockMap.entries()).map(([id, name]) => ({ _id: id, name })),
+        metrics: {
+          totalRooms: allHostelRooms.length,
+          totalBeds,
+          occupiedBeds,
+          vacantBeds,
+          occupancyRate,
+          maintenanceRooms,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching warden rooms:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Get Unassigned Students in this hostel
+exports.getUnassignedStudents = async (req, res) => {
+  try {
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
+    const students = await User.find({
+      hostelId: targetHostelId,
+      role: 'student',
+      status: { $in: ['active', 'on-leave'] },
+      $or: [{ roomId: null }, { roomId: { $exists: false } }],
+    })
+      .select('name studentId phone email gender course year status profileImage')
+      .sort({ name: 1 })
+      .lean();
+
+    res.status(200).json({ success: true, count: students.length, data: students });
+  } catch (error) {
+    console.error('Error fetching unassigned students:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Assign Student to Available Bed
+exports.assignBed = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { studentId, reason = '' } = req.body;
+
+    if (!studentId || !mongoose.isValidObjectId(studentId)) {
+      return res.status(400).json({ success: false, message: 'Valid student ID is required' });
+    }
+    if (!roomId || !mongoose.isValidObjectId(roomId)) {
+      return res.status(400).json({ success: false, message: 'Valid room ID is required' });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(403).json({ success: false, message: 'No hostel assigned' });
+    }
+
+    // 1. Fetch Room & verify ownership
+    const room = await Room.findOne({ _id: roomId, hostelId: targetHostelId });
+    if (!room) {
+      return res.status(404).json({ success: false, message: 'Room not found in your assigned hostel' });
+    }
+
+    // Safeguard: Room status must not be maintenance or unavailable
+    if (room.status === 'maintenance' || room.status === 'unavailable') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot assign student: Room ${room.roomNumber} is currently marked as ${room.status}.`,
+      });
+    }
+
+    // Safeguard: Capacity check
+    const currentOccupancy = room.students ? room.students.length : 0;
+    if (currentOccupancy >= room.capacity) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot assign student: Room ${room.roomNumber} is already at full capacity (${room.capacity}/${room.capacity} beds occupied).`,
+      });
+    }
+
+    // 2. Fetch Student & verify hostel membership
+    const student = await User.findOne({ _id: studentId, role: 'student', hostelId: targetHostelId });
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found in your assigned hostel' });
+    }
+
+    // Safeguard: Prevent duplicate active allocations
+    if (student.roomId) {
+      const existingRoom = await Room.findById(student.roomId).select('roomNumber');
+      return res.status(400).json({
+        success: false,
+        message: `Student is already allocated to Room ${existingRoom?.roomNumber || student.roomId}. Use the Transfer action instead of Assign.`,
+      });
+    }
+
+    // Safeguard: Double check student is not in room's array
+    if (room.students.some(s => String(s) === String(studentId))) {
+      return res.status(400).json({
+        success: false,
+        message: `Student is already recorded in Room ${room.roomNumber}.`,
+      });
+    }
+
+    // 3. Update Room
+    room.students.push(studentId);
+    room.currentOccupancy = room.students.length;
+    if (room.currentOccupancy >= room.capacity) {
+      room.status = 'occupied';
+    } else {
+      room.status = 'available';
+    }
+    await room.save();
+
+    // 4. Update Student
+    student.roomId = room._id;
+    if (room.blockId) student.blockId = room.blockId;
+    await student.save();
+
+    // 5. Create Room Allocation History
+    const historyEntry = await RoomAllocationHistory.create({
+      hostelId: targetHostelId,
+      studentId: student._id,
+      toRoomId: room._id,
+      action: 'assign',
+      reason: reason.trim() || 'Assigned bed by Warden',
+      performedBy: req.user._id || req.user.id,
+      details: {
+        roomNumber: room.roomNumber,
+        occupancyAfter: room.currentOccupancy,
+        capacity: room.capacity,
+      },
+    });
+
+    const populatedRoom = await Room.findById(room._id)
+      .populate('students', 'name studentId phone email gender course year status profileImage')
+      .populate('blockId', 'name')
+      .lean();
+
+    res.status(200).json({
+      success: true,
+      message: `Student ${student.name} successfully assigned to Room ${room.roomNumber}`,
+      data: {
+        room: populatedRoom,
+        history: historyEntry,
+      },
+    });
+  } catch (error) {
+    console.error('Error assigning bed:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Transfer Student to another Room
+exports.transferBed = async (req, res) => {
+  try {
+    const { studentId, fromRoomId, toRoomId, reason = '' } = req.body;
+
+    if (!studentId || !mongoose.isValidObjectId(studentId)) {
+      return res.status(400).json({ success: false, message: 'Valid student ID is required' });
+    }
+    if (!fromRoomId || !mongoose.isValidObjectId(fromRoomId)) {
+      return res.status(400).json({ success: false, message: 'Valid source room ID is required' });
+    }
+    if (!toRoomId || !mongoose.isValidObjectId(toRoomId)) {
+      return res.status(400).json({ success: false, message: 'Valid target room ID is required' });
+    }
+
+    if (String(fromRoomId) === String(toRoomId)) {
+      return res.status(400).json({ success: false, message: 'Source and target room cannot be the same' });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(403).json({ success: false, message: 'No hostel assigned' });
+    }
+
+    // 1. Fetch source room & target room
+    const [sourceRoom, targetRoom, student] = await Promise.all([
+      Room.findOne({ _id: fromRoomId, hostelId: targetHostelId }),
+      Room.findOne({ _id: toRoomId, hostelId: targetHostelId }),
+      User.findOne({ _id: studentId, role: 'student', hostelId: targetHostelId }),
+    ]);
+
+    if (!sourceRoom) {
+      return res.status(404).json({ success: false, message: 'Source room not found in your assigned hostel' });
+    }
+    if (!targetRoom) {
+      return res.status(404).json({ success: false, message: 'Target room not found in your assigned hostel' });
+    }
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found in your assigned hostel' });
+    }
+
+    // Safeguard: Verify student is currently in source room
+    if (String(student.roomId) !== String(fromRoomId) && !sourceRoom.students.some(s => String(s) === String(studentId))) {
+      return res.status(400).json({
+        success: false,
+        message: `Student is not currently allocated to source Room ${sourceRoom.roomNumber}.`,
+      });
+    }
+
+    // Safeguard: Target room status must not be maintenance/unavailable
+    if (targetRoom.status === 'maintenance' || targetRoom.status === 'unavailable') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot transfer student: Target Room ${targetRoom.roomNumber} is currently under ${targetRoom.status}.`,
+      });
+    }
+
+    // Safeguard: Target room must have available beds
+    const targetOccupancy = targetRoom.students ? targetRoom.students.length : 0;
+    if (targetOccupancy >= targetRoom.capacity) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot transfer student: Target Room ${targetRoom.roomNumber} is at full capacity (${targetRoom.capacity}/${targetRoom.capacity} beds occupied).`,
+      });
+    }
+
+    // 2. Remove from Source Room
+    sourceRoom.students = sourceRoom.students.filter(s => String(s) !== String(studentId));
+    sourceRoom.currentOccupancy = sourceRoom.students.length;
+    if (sourceRoom.status === 'occupied' && sourceRoom.currentOccupancy < sourceRoom.capacity) {
+      sourceRoom.status = 'available';
+    }
+    await sourceRoom.save();
+
+    // 3. Add to Target Room
+    targetRoom.students.push(studentId);
+    targetRoom.currentOccupancy = targetRoom.students.length;
+    if (targetRoom.currentOccupancy >= targetRoom.capacity) {
+      targetRoom.status = 'occupied';
+    } else {
+      targetRoom.status = 'available';
+    }
+    await targetRoom.save();
+
+    // 4. Update Student
+    student.roomId = targetRoom._id;
+    if (targetRoom.blockId) student.blockId = targetRoom.blockId;
+    await student.save();
+
+    // 5. Create History
+    const historyEntry = await RoomAllocationHistory.create({
+      hostelId: targetHostelId,
+      studentId: student._id,
+      fromRoomId: sourceRoom._id,
+      toRoomId: targetRoom._id,
+      action: 'transfer',
+      reason: reason.trim() || 'Room transfer by Warden',
+      performedBy: req.user._id || req.user.id,
+      details: {
+        fromRoomNumber: sourceRoom.roomNumber,
+        toRoomNumber: targetRoom.roomNumber,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Student ${student.name} successfully transferred from Room ${sourceRoom.roomNumber} to Room ${targetRoom.roomNumber}`,
+      data: {
+        fromRoom: sourceRoom,
+        toRoom: targetRoom,
+        history: historyEntry,
+      },
+    });
+  } catch (error) {
+    console.error('Error transferring bed:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Vacate Bed (Remove student from room)
+exports.vacateBed = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { studentId, reason = '' } = req.body;
+
+    if (!studentId || !mongoose.isValidObjectId(studentId)) {
+      return res.status(400).json({ success: false, message: 'Valid student ID is required' });
+    }
+    if (!roomId || !mongoose.isValidObjectId(roomId)) {
+      return res.status(400).json({ success: false, message: 'Valid room ID is required' });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(403).json({ success: false, message: 'No hostel assigned' });
+    }
+
+    const [room, student] = await Promise.all([
+      Room.findOne({ _id: roomId, hostelId: targetHostelId }),
+      User.findOne({ _id: studentId, role: 'student', hostelId: targetHostelId }),
+    ]);
+
+    if (!room) {
+      return res.status(404).json({ success: false, message: 'Room not found in your assigned hostel' });
+    }
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found in your assigned hostel' });
+    }
+
+    // Remove from room students
+    room.students = (room.students || []).filter(s => String(s) !== String(studentId));
+    room.currentOccupancy = room.students.length;
+    if (room.status === 'occupied' && room.currentOccupancy < room.capacity) {
+      room.status = 'available';
+    }
+    await room.save();
+
+    // Clear student's room
+    student.roomId = undefined;
+    await student.save();
+
+    // Create history
+    const historyEntry = await RoomAllocationHistory.create({
+      hostelId: targetHostelId,
+      studentId: student._id,
+      fromRoomId: room._id,
+      action: 'vacate',
+      reason: reason.trim() || 'Bed vacated by Warden',
+      performedBy: req.user._id || req.user.id,
+      details: {
+        roomNumber: room.roomNumber,
+        occupancyAfter: room.currentOccupancy,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Student ${student.name} vacated from Room ${room.roomNumber}`,
+      data: {
+        room,
+        history: historyEntry,
+      },
+    });
+  } catch (error) {
+    console.error('Error vacating bed:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Update Room Status (Available, Maintenance, Unavailable)
+exports.updateRoomStatus = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { status, reason = '' } = req.body;
+
+    const allowed = ['available', 'maintenance', 'unavailable'];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ success: false, message: `Status must be one of: ${allowed.join(', ')}` });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(403).json({ success: false, message: 'No hostel assigned' });
+    }
+
+    const room = await Room.findOne({ _id: roomId, hostelId: targetHostelId });
+    if (!room) {
+      return res.status(404).json({ success: false, message: 'Room not found in your assigned hostel' });
+    }
+
+    const previousStatus = room.status;
+
+    if (status === 'available') {
+      const occ = room.students ? room.students.length : (room.currentOccupancy || 0);
+      room.status = occ >= room.capacity ? 'occupied' : 'available';
+    } else {
+      room.status = status;
+    }
+
+    await room.save();
+
+    const historyEntry = await RoomAllocationHistory.create({
+      hostelId: targetHostelId,
+      toRoomId: room._id,
+      action: status === 'maintenance' ? 'maintenance' : 'status_change',
+      reason: reason.trim() || `Status changed from ${previousStatus} to ${room.status}`,
+      performedBy: req.user._id || req.user.id,
+      details: {
+        roomNumber: room.roomNumber,
+        previousStatus,
+        newStatus: room.status,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Room ${room.roomNumber} status updated to ${room.status}`,
+      data: {
+        room,
+        history: historyEntry,
+      },
+    });
+  } catch (error) {
+    console.error('Error updating room status:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Report Room Problem (Maintenance Complaint)
+exports.reportRoomProblem = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { title, description, priority = 'medium', complaintType = 'maintenance' } = req.body;
+
+    if (!title || !description) {
+      return res.status(400).json({ success: false, message: 'Title and description are required' });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(403).json({ success: false, message: 'No hostel assigned' });
+    }
+
+    const room = await Room.findOne({ _id: roomId, hostelId: targetHostelId });
+    if (!room) {
+      return res.status(404).json({ success: false, message: 'Room not found in your assigned hostel' });
+    }
+
+    const complaint = await Complaint.create({
+      raisedBy: req.user._id || req.user.id,
+      hostelId: targetHostelId,
+      blockId: room.blockId,
+      roomId: room._id,
+      title: `[Room ${room.roomNumber}] ${title.trim()}`,
+      description: description.trim(),
+      complaintType,
+      priority,
+      status: 'open',
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `Room problem reported successfully for Room ${room.roomNumber}`,
+      data: complaint,
+    });
+  } catch (error) {
+    console.error('Error reporting room problem:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Get Room Allocation History
+exports.getRoomAllocationHistory = async (req, res) => {
+  try {
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: 1, limit: 20 } });
+    }
+
+    const { roomId, studentId, page = 1, limit = 20 } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+
+    const filter = { hostelId: targetHostelId };
+    if (roomId && mongoose.isValidObjectId(roomId)) {
+      filter.$or = [{ toRoomId: roomId }, { fromRoomId: roomId }];
+    }
+    if (studentId && mongoose.isValidObjectId(studentId)) {
+      filter.studentId = studentId;
+    }
+
+    const [total, history] = await Promise.all([
+      RoomAllocationHistory.countDocuments(filter),
+      RoomAllocationHistory.find(filter)
+        .populate('studentId', 'name studentId phone email profileImage')
+        .populate('fromRoomId', 'roomNumber floorNumber')
+        .populate('toRoomId', 'roomNumber floorNumber')
+        .populate('performedBy', 'name role')
+        .sort({ createdAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .lean(),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: history,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 1,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching room allocation history:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 
 

@@ -62,6 +62,18 @@ const userSchema = new mongoose.Schema({
     enum: ['active', 'on-leave', 'exited', 'suspended'],
     default: 'active',
   },
+  gender: {
+    type: String,
+    enum: ['male', 'female', 'other'],
+  },
+  course: {
+    type: String,
+    trim: true,
+  },
+  year: {
+    type: String,
+    trim: true,
+  },
   parentContact: {
     name: String,
     phone: String,
@@ -121,6 +133,9 @@ const userSchema = new mongoose.Schema({
     type: Date,
   },
 });
+
+userSchema.index({ hostelId: 1, role: 1, status: 1 });
+userSchema.index({ hostelId: 1, roomId: 1 });
 
 userSchema.pre('save', async function (next) {
   // Normalize role to array and ensure currentRole is set
