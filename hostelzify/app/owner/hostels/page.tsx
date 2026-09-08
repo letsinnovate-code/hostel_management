@@ -5,13 +5,18 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../contexts/AuthContext';
 import api from '../../../services/api';
 import Link from 'next/link';
-import { MapPin, Users, Bed, Building2, Edit, Eye, Plus, Loader2 } from 'lucide-react';
+import { MapPin, Users, Bed, Building2, Edit, Eye, Plus, Loader2, Trash2 } from 'lucide-react';
+import ConfirmModal, { useConfirmModal } from '../../../components/ConfirmModal';
+import { useToast } from '../../../components/Toast';
 
 export default function OwnerHostels() {
   const { user } = useAuth();
   const router = useRouter();
+  const { confirm } = useConfirmModal();
+  const { showToast } = useToast();
   const [hostels, setHostels] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user || user.role !== 'owner') {
@@ -30,6 +35,29 @@ export default function OwnerHostels() {
       console.error('Failed to load hostels:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteHostel = async (hostelId: string, hostelName: string) => {
+    const result = await confirm({
+      title: 'Delete Hostel',
+      message: `Are you sure you want to delete "${hostelName || 'this hostel'}"? This will permanently delete the hostel, all associated rooms, blocks, amenities, rules, and geofences. This action cannot be undone.`,
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      confirmButtonClass: 'bg-red-600 hover:bg-red-700',
+    });
+
+    if (result) {
+      setDeletingId(hostelId);
+      try {
+        await api.deleteHostel(hostelId);
+        showToast('Hostel deleted successfully', 'success');
+        setHostels((prev) => prev.filter((h) => (h._id || h.id) !== hostelId));
+      } catch (error: any) {
+        showToast(error.message || 'Failed to delete hostel', 'error');
+      } finally {
+        setDeletingId(null);
+      }
     }
   };
 
@@ -230,19 +258,31 @@ export default function OwnerHostels() {
                       {/* Actions */}
                       <div className="flex gap-2">
                         <Link
-                          href={`/owner/hostels/${hostel._id || hostel.id}`}
-                          className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium"
+                          href={`/owner/hostels/${hostelKey}`}
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium"
                         >
                           <Eye className="w-4 h-4" />
                           View
                         </Link>
-                    <Link
-                      href={`/owner/hostels/${hostel._id || hostel.id}/edit`}
-                          className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
-                    >
+                        <Link
+                          href={`/owner/hostels/${hostelKey}/edit`}
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+                        >
                           <Edit className="w-4 h-4" />
-                      Edit
-                    </Link>
+                          Edit
+                        </Link>
+                        <button
+                          onClick={() => handleDeleteHostel(hostelKey, hostel.name)}
+                          disabled={deletingId === hostelKey}
+                          title="Delete Hostel"
+                          className="px-3 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg hover:bg-red-100 transition-colors text-sm font-medium disabled:opacity-50 flex items-center justify-center"
+                        >
+                          {deletingId === hostelKey ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                        </button>
                       </div>
                   </div>
                 </div>
@@ -251,6 +291,7 @@ export default function OwnerHostels() {
           </div>
         )}
         </div>
+        <ConfirmModal />
       </div>
   );
 }

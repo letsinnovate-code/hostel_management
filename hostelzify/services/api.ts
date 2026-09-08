@@ -159,6 +159,11 @@ class ApiService {
     return response.data;
   }
 
+  async deleteHostel(hostelId: string) {
+    const response = await this.api.delete(`/owner/hostels/${hostelId}`);
+    return response.data;
+  }
+
   async uploadHostelImages(hostelId: string, images: FormData) {
     const response = await this.api.post(`/owner/hostels/${hostelId}/images`, images, {
       headers: {

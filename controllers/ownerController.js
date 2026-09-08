@@ -37,35 +37,136 @@ try {
   console.warn('xlsx package not installed. Bulk upload will not work.');
 }
 
+// Helper function to sanitize hostel payload to avoid Mongoose validation errors
+function sanitizeHostelPayload(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const data = { ...raw };
+
+  // Valid enums
+  const validTypes = ['boys', 'girls', 'co-ed'];
+  if (data.type !== undefined) {
+    if (!validTypes.includes(data.type)) {
+      data.type = 'boys';
+    }
+  }
+
+  const validStatus = ['active', 'inactive', 'pending', 'suspended'];
+  if (data.status !== undefined) {
+    if (!validStatus.includes(data.status)) {
+      data.status = 'active';
+    }
+  }
+
+  // Numbers at top level
+  if (data.capacity !== undefined) data.capacity = Number(data.capacity) || 0;
+  if (data.totalRooms !== undefined) data.totalRooms = Number(data.totalRooms) || 0;
+  if (data.totalBlocks !== undefined) data.totalBlocks = Number(data.totalBlocks) || 0;
+  if (data.totalFloors !== undefined) data.totalFloors = Number(data.totalFloors) || 0;
+
+  // Images
+  if (data.images != null) {
+    const rawImgs = data.images;
+    data.images = Array.isArray(rawImgs)
+      ? rawImgs.map(u => (typeof u === 'string' ? u : String(u))).filter(Boolean)
+      : typeof rawImgs === 'string' && rawImgs.trim()
+      ? [rawImgs.trim()]
+      : [];
+  }
+
+  // Address
+  if (data.address && typeof data.address === 'object') {
+    const addr = { ...data.address };
+    const coords = addr.coordinates;
+    if (
+      !coords ||
+      typeof coords.latitude !== 'number' ||
+      typeof coords.longitude !== 'number' ||
+      isNaN(coords.latitude) ||
+      isNaN(coords.longitude)
+    ) {
+      delete addr.coordinates;
+    }
+    data.address = addr;
+  }
+
+  // Amenities
+  if (data.amenities && typeof data.amenities === 'object') {
+    const a = { ...data.amenities };
+    const validLaundry = ['self-service', 'service', 'both'];
+    if (!validLaundry.includes(a.laundryType)) a.laundryType = 'self-service';
+
+    const validMess = ['vegetarian', 'non-vegetarian', 'both'];
+    if (!validMess.includes(a.messType)) a.messType = 'both';
+
+    const validParking = ['two-wheeler', 'four-wheeler', 'both'];
+    if (!validParking.includes(a.parkingType)) a.parkingType = 'two-wheeler';
+
+    if (a.wifiCost !== undefined) a.wifiCost = Number(a.wifiCost) || 0;
+    if (a.laundryCost !== undefined) a.laundryCost = Number(a.laundryCost) || 0;
+    if (a.messCost !== undefined) a.messCost = Number(a.messCost) || 0;
+    if (a.parkingCost !== undefined) a.parkingCost = Number(a.parkingCost) || 0;
+    data.amenities = a;
+  }
+
+  // Facilities
+  if (data.facilities && typeof data.facilities === 'object') {
+    const f = { ...data.facilities };
+    const validWater = ['24x7', 'scheduled', 'limited'];
+    if (!validWater.includes(f.waterSupplyType)) f.waterSupplyType = '24x7';
+
+    if (f.securityGuards !== undefined) f.securityGuards = Number(f.securityGuards) || 0;
+    if (f.cctvCount !== undefined) f.cctvCount = Number(f.cctvCount) || 0;
+    if (f.powerBackupHours !== undefined) f.powerBackupHours = Number(f.powerBackupHours) || 0;
+    data.facilities = f;
+  }
+
+  // Pricing
+  if (data.pricing && typeof data.pricing === 'object') {
+    const p = { ...data.pricing };
+    const validElec = ['included', 'separate', 'metered'];
+    if (!validElec.includes(p.electricityCharges)) p.electricityCharges = 'separate';
+
+    const validWater = ['included', 'separate'];
+    if (!validWater.includes(p.waterCharges)) p.waterCharges = 'included';
+
+    if (p.minRent !== undefined) p.minRent = Number(p.minRent) || 0;
+    if (p.maxRent !== undefined) p.maxRent = Number(p.maxRent) || 0;
+    if (p.securityDeposit !== undefined) p.securityDeposit = Number(p.securityDeposit) || 0;
+    if (p.maintenanceCharges !== undefined) p.maintenanceCharges = Number(p.maintenanceCharges) || 0;
+    data.pricing = p;
+  }
+
+  // Rules
+  if (data.rules && typeof data.rules === 'object') {
+    const r = { ...data.rules };
+    if (r.lateEntryFine !== undefined) r.lateEntryFine = Number(r.lateEntryFine) || 0;
+    if (r.messTimings && typeof r.messTimings === 'object') {
+      r.messTimings = {
+        breakfast: r.messTimings.breakfast || '',
+        lunch: r.messTimings.lunch || '',
+        dinner: r.messTimings.dinner || '',
+      };
+    }
+    data.rules = r;
+  }
+
+  return data;
+}
+
 // ============ HOSTEL CONFIGURATION ============
 
 // Create Hostel
 exports.createHostel = async (req, res) => {
   try {
-    const hostelData = { ...req.body };
     const ownerId = req.user._id || req.user.id;
     if (!ownerId) {
       return res.status(401).json({ success: false, message: 'User not found' });
     }
+
+    const hostelData = sanitizeHostelPayload(req.body);
     hostelData.ownerId = ownerId;
 
-    // Normalize nearbyPlaces: must be array of { name, distance?, type? } (handled again before create)
-
-    // Ensure images is an array of strings
-    if (hostelData.images != null) {
-      const raw = hostelData.images;
-      hostelData.images = Array.isArray(raw) ? raw.map((u) => (typeof u === 'string' ? u : String(u))) : typeof raw === 'string' ? [raw] : [];
-    }
-
-    // Never pass undefined/invalid address.coordinates - Mongoose cast fails
-    if (hostelData.address) {
-      const coords = hostelData.address.coordinates;
-      if (coords == null || typeof coords.latitude !== 'number' || typeof coords.longitude !== 'number') {
-        delete hostelData.address.coordinates;
-      }
-    }
-
-    // Geocode address if provided
+    // Geocode address if provided and coordinates not present
     if (hostelData.address && !hostelData.address.coordinates) {
       try {
         const addressString = [
@@ -94,7 +195,6 @@ exports.createHostel = async (req, res) => {
         }
       } catch (error) {
         console.error('Geocoding error:', error);
-        // Continue without geocoding if it fails
       }
     }
 
@@ -201,60 +301,50 @@ exports.updateHostel = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not authorized to modify this hostel' });
     }
 
+    const cleanData = sanitizeHostelPayload(req.body);
+
     // Update basic fields
-    const fieldsToUpdate = ['name', 'type', 'description', 'shortDescription', 'capacity',
+    const fieldsToUpdate = ['name', 'description', 'shortDescription', 'capacity',
       'totalRooms', 'totalBlocks', 'totalFloors', 'status', 'isVerified'];
 
     fieldsToUpdate.forEach(field => {
-      if (req.body[field] !== undefined) hostel[field] = req.body[field];
+      if (cleanData[field] !== undefined) hostel[field] = cleanData[field];
     });
 
-    // Update nested objects if provided
-    if (req.body.contact) {
-      hostel.contact = { ...hostel.contact, ...req.body.contact };
+    const validTypes = ['boys', 'girls', 'co-ed'];
+    if (cleanData.type && validTypes.includes(cleanData.type)) {
+      hostel.type = cleanData.type;
     }
-    if (req.body.pricing) {
-      hostel.pricing = { ...hostel.pricing, ...req.body.pricing };
-    }
-    if (req.body.operatingHours) {
-      hostel.operatingHours = { ...hostel.operatingHours, ...req.body.operatingHours };
-    }
-    if (req.body.amenities) {
-      hostel.amenities = { ...hostel.amenities, ...req.body.amenities };
-    }
-    if (req.body.facilities) {
-      hostel.facilities = { ...hostel.facilities, ...req.body.facilities };
-    }
-    if (req.body.rules) {
-      hostel.rules = { ...hostel.rules, ...req.body.rules };
-    }
-    if (req.body.businessInfo) {
-      hostel.businessInfo = { ...hostel.businessInfo, ...req.body.businessInfo };
-    }
-    if (req.body.highlights) hostel.highlights = req.body.highlights;
-    if (req.body.tags) hostel.tags = req.body.tags;
+
+    // Update nested objects safely by merging with plain object representation
+    const nestedSections = ['contact', 'pricing', 'operatingHours', 'amenities', 'facilities', 'rules', 'businessInfo'];
+    nestedSections.forEach(sec => {
+      if (cleanData[sec]) {
+        const current = hostel[sec]?.toObject ? hostel[sec].toObject() : (hostel[sec] || {});
+        hostel.set(sec, { ...current, ...cleanData[sec] });
+      }
+    });
+
+    if (cleanData.highlights !== undefined) hostel.highlights = cleanData.highlights;
+    if (cleanData.tags !== undefined) hostel.tags = cleanData.tags;
 
     // Handle Address Update
-    if (req.body.address) {
-      const incoming = { ...req.body.address };
-      // Never pass undefined coordinates to Mongoose - it fails cast. Omit or use existing.
-      const hasValidCoords = incoming.coordinates != null &&
-        typeof incoming.coordinates.latitude === 'number' &&
-        typeof incoming.coordinates.longitude === 'number';
-      if (!hasValidCoords) {
-        delete incoming.coordinates;
-      }
-      const newAddress = { ...hostel.address, ...incoming };
+    if (cleanData.address) {
+      const incoming = { ...cleanData.address };
+      const currentAddr = hostel.address?.toObject ? hostel.address.toObject() : (hostel.address || {});
+      const newAddress = { ...currentAddr, ...incoming };
 
-      // If we have valid coordinates from incoming, they're already in newAddress
-      if (newAddress.coordinates === undefined || newAddress.coordinates === null ||
-        typeof newAddress.coordinates?.latitude !== 'number' || typeof newAddress.coordinates?.longitude !== 'number') {
+      // Ensure valid coordinates
+      if (
+        !newAddress.coordinates ||
+        typeof newAddress.coordinates.latitude !== 'number' ||
+        typeof newAddress.coordinates.longitude !== 'number'
+      ) {
         delete newAddress.coordinates;
-        if (hostel.address?.coordinates?.latitude != null && hostel.address?.coordinates?.longitude != null) {
-          newAddress.coordinates = hostel.address.coordinates;
-        }
-        // Try geocoding if we still don't have valid coordinates
-        if (!newAddress.coordinates) {
+        if (currentAddr.coordinates?.latitude != null && currentAddr.coordinates?.longitude != null) {
+          newAddress.coordinates = currentAddr.coordinates;
+        } else {
+          // Try geocoding if we still don't have valid coordinates
           try {
             const addressString = [
               newAddress.street,
@@ -266,19 +356,21 @@ exports.updateHostel = async (req, res) => {
 
             if (addressString) {
               const geocodeResult = await geocodeAddress(addressString);
-              newAddress.coordinates = {
-                latitude: geocodeResult.latitude,
-                longitude: geocodeResult.longitude,
-              };
-              newAddress.formattedAddress = geocodeResult.formattedAddress;
-              newAddress.placeId = geocodeResult.placeId;
+              if (geocodeResult) {
+                newAddress.coordinates = {
+                  latitude: geocodeResult.latitude,
+                  longitude: geocodeResult.longitude,
+                };
+                newAddress.formattedAddress = geocodeResult.formattedAddress;
+                newAddress.placeId = geocodeResult.placeId;
+              }
             }
           } catch (error) {
             console.error('Geocoding error during update:', error);
           }
         }
       }
-      hostel.address = newAddress;
+      hostel.set('address', newAddress);
     }
 
     await hostel.save();
@@ -416,9 +508,24 @@ exports.deleteHostel = async (req, res) => {
     if (!isSuperAdmin && String(hostel.ownerId) !== String(ownerId)) {
       return res.status(403).json({ success: false, message: 'Not authorized to delete this hostel' });
     }
-    await Hostel.findByIdAndDelete(req.params.id);
-    res.status(200).json({ success: true, message: 'Hostel deleted' });
+
+    const hostelId = req.params.id;
+
+    // Cascade delete associated records
+    await Promise.all([
+      Hostel.findByIdAndDelete(hostelId),
+      Block.deleteMany({ hostelId }),
+      Room.deleteMany({ hostelId }),
+      Amenity.deleteMany({ hostelId }),
+      Rule.deleteMany({ hostelId }),
+      GeoFence.deleteMany({ hostelId }),
+      // Unassign students from this hostel so they don't have dangling references
+      User.updateMany({ hostelId }, { $unset: { hostelId: 1, roomNumber: 1, room: 1 } }),
+    ]);
+
+    res.status(200).json({ success: true, message: 'Hostel and associated records deleted successfully' });
   } catch (error) {
+    console.error('Delete Hostel Error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -6,7 +6,7 @@ import { useAuth } from '../../../../contexts/AuthContext';
 import api from '../../../../services/api';
 import GoogleMap from '../../../../components/GoogleMap';
 import { useToast } from '../../../../components/Toast';
-import { useConfirmModal } from '../../../../components/ConfirmModal';
+import ConfirmModal, { useConfirmModal } from '../../../../components/ConfirmModal';
 import Link from 'next/link';
 import { 
   Edit, Loader2, Upload, Trash2, MapPin, Phone, Mail, Users, Bed, Building2, 
@@ -25,7 +25,30 @@ export default function HostelDetailPage() {
   const [hostel, setHostel] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+
+  const handleDeleteHostel = async () => {
+    const result = await confirm({
+      title: 'Delete Hostel',
+      message: `Are you sure you want to delete "${hostel?.name || 'this hostel'}"? This will permanently delete the hostel, all associated rooms, blocks, amenities, rules, and geofences. This action cannot be undone.`,
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      confirmButtonClass: 'bg-red-600 hover:bg-red-700',
+    });
+
+    if (result) {
+      setDeleting(true);
+      try {
+        await api.deleteHostel(id);
+        showToast('Hostel deleted successfully', 'success');
+        router.push('/owner/hostels');
+      } catch (error: any) {
+        showToast(error.message || 'Failed to delete hostel', 'error');
+        setDeleting(false);
+      }
+    }
+  };
 
   useEffect(() => {
     if (!user || user.role !== 'owner') {
@@ -205,13 +228,23 @@ export default function HostelDetailPage() {
                   {formatAddress(hostel.address)}
                 </p>
               </div>
-              <Link
-                href={`/owner/hostels/${id}/edit`}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 justify-center sm:justify-start"
-              >
-                <Edit className="w-4 h-4" />
-                Edit Hostel
-              </Link>
+              <div className="flex items-center gap-3">
+                <Link
+                  href={`/owner/hostels/${id}/edit`}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 justify-center"
+                >
+                  <Edit className="w-4 h-4" />
+                  Edit Hostel
+                </Link>
+                <button
+                  onClick={handleDeleteHostel}
+                  disabled={deleting}
+                  className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-2 justify-center font-medium disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {deleting ? 'Deleting...' : 'Delete'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -769,6 +802,7 @@ export default function HostelDetailPage() {
           )}
 
         </div>
+        <ConfirmModal />
       </div>
     
   );

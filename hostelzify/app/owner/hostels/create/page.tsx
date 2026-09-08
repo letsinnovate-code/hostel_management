@@ -210,6 +210,9 @@ export default function CreateHostelPage() {
         totalFloors: parseInt(formData.totalFloors) || 0,
         pricing: {
           ...formData.pricing,
+          electricityCharges: formData.pricing?.electricityCharges || 'separate',
+          waterCharges: formData.pricing?.waterCharges || 'included',
+          currency: formData.pricing?.currency || 'INR',
           minRent: parseFloat(formData.pricing.minRent) || 0,
           maxRent: parseFloat(formData.pricing.maxRent) || 0,
           securityDeposit: parseFloat(formData.pricing.securityDeposit) || 0,
@@ -217,12 +220,16 @@ export default function CreateHostelPage() {
         },
         facilities: {
           ...formData.facilities,
+          waterSupplyType: formData.facilities?.waterSupplyType || '24x7',
           securityGuards: parseInt(formData.facilities.securityGuards) || 0,
           cctvCount: parseInt(formData.facilities.cctvCount) || 0,
           powerBackupHours: parseInt(formData.facilities.powerBackupHours) || 0,
         },
         amenities: {
           ...formData.amenities,
+          laundryType: formData.amenities?.laundryType || 'self-service',
+          messType: formData.amenities?.messType || 'both',
+          parkingType: formData.amenities?.parkingType || 'two-wheeler',
           wifiCost: parseFloat(formData.amenities.wifiCost) || 0,
           laundryCost: parseFloat(formData.amenities.laundryCost) || 0,
           messCost: parseFloat(formData.amenities.messCost) || 0,

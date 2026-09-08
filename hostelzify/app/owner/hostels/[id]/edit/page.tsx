@@ -6,7 +6,9 @@ import { useAuth } from '../../../../../contexts/AuthContext';
 import api from '../../../../../services/api';
 import AddressInput from '../../../../../components/AddressInput';
 import { useToast } from '../../../../../components/Toast';
+import ConfirmModal, { useConfirmModal } from '../../../../../components/ConfirmModal';
 import Link from 'next/link';
+import { Trash2 } from 'lucide-react';
 
 export default function EditHostelPage() {
   const { user } = useAuth();
@@ -14,10 +16,12 @@ export default function EditHostelPage() {
   const params = useParams();
   const id = params?.id as string;
   const { showToast } = useToast();
+  const { confirm } = useConfirmModal();
 
   const [hostel, setHostel] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [activeSection, setActiveSection] = useState('basic');
   const [formData, setFormData] = useState<any>(null);
   const [highlightInput, setHighlightInput] = useState('');
@@ -248,13 +252,42 @@ export default function EditHostelPage() {
   };
 
   const handleDeleteImage = async (imageUrl: string) => {
-    if (!confirm('Remove this image?')) return;
+    const shouldDelete = await confirm({
+      title: 'Remove Image',
+      message: 'Are you sure you want to remove this image from the hostel?',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      confirmButtonClass: 'bg-red-600 hover:bg-red-700',
+    });
+    if (!shouldDelete) return;
     try {
       await api.deleteHostelImage(id, imageUrl);
       await loadHostel();
       showToast('Image removed', 'success');
     } catch (error: any) {
       showToast(error.message || 'Failed to delete image', 'error');
+    }
+  };
+
+  const handleDeleteHostel = async () => {
+    const result = await confirm({
+      title: 'Delete Hostel',
+      message: `Are you sure you want to delete "${hostel?.name || 'this hostel'}"? This will permanently delete the hostel, all associated rooms, blocks, amenities, rules, and geofences. This action cannot be undone.`,
+      confirmText: 'Delete Permanently',
+      cancelText: 'Cancel',
+      confirmButtonClass: 'bg-red-600 hover:bg-red-700',
+    });
+
+    if (result) {
+      setDeleting(true);
+      try {
+        await api.deleteHostel(id);
+        showToast('Hostel deleted successfully', 'success');
+        router.push('/owner/hostels');
+      } catch (error: any) {
+        showToast(error.message || 'Failed to delete hostel', 'error');
+        setDeleting(false);
+      }
     }
   };
 
@@ -274,6 +307,9 @@ export default function EditHostelPage() {
         totalFloors: parseInt(formData.totalFloors) || 0,
         pricing: {
           ...formData.pricing,
+          electricityCharges: formData.pricing?.electricityCharges || 'separate',
+          waterCharges: formData.pricing?.waterCharges || 'included',
+          currency: formData.pricing?.currency || 'INR',
           minRent: parseFloat(formData.pricing.minRent) || 0,
           maxRent: parseFloat(formData.pricing.maxRent) || 0,
           securityDeposit: parseFloat(formData.pricing.securityDeposit) || 0,
@@ -281,12 +317,16 @@ export default function EditHostelPage() {
         },
         facilities: {
           ...formData.facilities,
+          waterSupplyType: formData.facilities?.waterSupplyType || '24x7',
           securityGuards: parseInt(formData.facilities.securityGuards) || 0,
           cctvCount: parseInt(formData.facilities.cctvCount) || 0,
           powerBackupHours: parseInt(formData.facilities.powerBackupHours) || 0,
         },
         amenities: {
           ...formData.amenities,
+          laundryType: formData.amenities?.laundryType || 'self-service',
+          messType: formData.amenities?.messType || 'both',
+          parkingType: formData.amenities?.parkingType || 'two-wheeler',
           wifiCost: parseFloat(formData.amenities.wifiCost) || 0,
           laundryCost: parseFloat(formData.amenities.laundryCost) || 0,
           messCost: parseFloat(formData.amenities.messCost) || 0,
@@ -323,12 +363,23 @@ export default function EditHostelPage() {
       <div className="p-6">
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold text-gray-900">Edit Hostel</h1>
-          <Link
-            href={`/owner/hostels/${id}`}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-          >
-            Cancel
-          </Link>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleDeleteHostel}
+              disabled={deleting}
+              className="px-4 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <Trash2 className="w-4 h-4" />
+              {deleting ? 'Deleting...' : 'Delete Hostel'}
+            </button>
+            <Link
+              href={`/owner/hostels/${id}`}
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+            >
+              Cancel
+            </Link>
+          </div>
         </div>
 
         <div className="bg-white rounded-lg shadow">
@@ -1810,6 +1861,7 @@ export default function EditHostelPage() {
             </div>
           </div>
         </div>
+        <ConfirmModal />
       </div>
     
   );
