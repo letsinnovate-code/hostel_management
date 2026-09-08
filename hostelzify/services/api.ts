@@ -631,6 +631,75 @@ class ApiService {
     return response.data;
   }
 
+  async acknowledgeEmergency(emergencyId: string) {
+    const response = await this.api.post(`/warden/emergencies/${emergencyId}/acknowledge`);
+    return response.data;
+  }
+
+  async markWardenAttendance(data: { studentId: string; status: string; notes?: string }) {
+    const response = await this.api.post('/warden/attendance/mark', data);
+    return response.data;
+  }
+
+  async getWardenHostelStudents() {
+    const response = await this.api.get('/warden/students');
+    return response.data;
+  }
+
+  async createWardenVisitor(data: {
+    visitorName: string;
+    visitorPhone: string;
+    visitorIdProof?: string;
+    visitingStudentId: string;
+    purpose: string;
+    visitDate?: string;
+    autoApprove?: boolean;
+  }) {
+    const response = await this.api.post('/warden/visitors', data);
+    return response.data;
+  }
+
+  async checkoutWardenVisitor(visitorId: string) {
+    const response = await this.api.post(`/warden/visitors/${visitorId}/checkout`);
+    return response.data;
+  }
+
+  async createWardenAnnouncement(data: {
+    title: string;
+    message: string;
+    type?: string;
+    targetAudience?: string;
+    priority?: string;
+  }) {
+    const response = await this.api.post('/warden/announcements', data);
+    return response.data;
+  }
+
+  async reportWardenMaintenance(data: {
+    title: string;
+    description: string;
+    roomId?: string;
+    priority?: string;
+  }) {
+    const response = await this.api.post('/warden/maintenance', data);
+    return response.data;
+  }
+
+  async getWardenComplaints(params?: { status?: string; type?: string; priority?: string }) {
+    const response = await this.api.get('/warden/complaints', { params });
+    return response.data;
+  }
+
+  async updateWardenComplaintStatus(id: string, data: { status?: string; resolutionNotes?: string; assignedTo?: string }) {
+    const response = await this.api.put(`/warden/complaints/${id}/status`, data);
+    return response.data;
+  }
+
+  async createWardenIncident(data: { title: string; description: string; roomId?: string; priority?: string }) {
+    const response = await this.api.post('/warden/incidents', data);
+    return response.data;
+  }
+
   // Student APIs
   async getProfile() {
     const response = await this.api.get('/student/profile');

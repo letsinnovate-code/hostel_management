@@ -15,26 +15,23 @@ import {
   Users,
   Clock,
   CheckCircle2,
-  XCircle,
   Trash2,
   RefreshCw,
   Search,
-  Activity,
   Megaphone,
-  Bell,
-  Sliders,
-  History,
-  Calendar,
-  Send,
   AlertOctagon,
-  ArrowUpRight,
-  Info,
   ChevronRight,
-  SquareCheck,
-  Check,
   X,
   Play,
   StopCircle,
+  BedDouble,
+  Wrench,
+  MessageSquare,
+  Plus,
+  AlertCircle,
+  UserCheck,
+  Building,
+  Radio,
 } from 'lucide-react';
 
 export default function WardenDashboard() {
@@ -45,11 +42,12 @@ export default function WardenDashboard() {
   // ── Live Clock State ──────────────────────────────────────────────────────────
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
 
-  // ── Active Card Selection ───────────────────────────────────────────────────
-  const [activeCard, setActiveCard] = useState<'permissions' | 'violations' | 'visitors' | 'curfew'>('permissions');
+  // ── Active Navigation Tab ───────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<'overview' | 'permissions' | 'violations' | 'visitors' | 'curfew' | 'complaints'>('overview');
 
-  // ── Dashboard Data State ────────────────────────────────────────────────────
+  // ── Dashboard & Auxiliary Data State ────────────────────────────────────────
   const [dashboard, setDashboard] = useState<any>(null);
+  const [hostelStudents, setHostelStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
@@ -64,6 +62,10 @@ export default function WardenDashboard() {
 
   const [visitors, setVisitors] = useState<any[]>([]);
   const [visitorSearch, setVisitorSearch] = useState('');
+
+  const [complaintsList, setComplaintsList] = useState<any[]>([]);
+  const [complaintTypeFilter, setComplaintTypeFilter] = useState('all');
+  const [complaintStatusFilter, setComplaintStatusFilter] = useState('all');
 
   // ── Curfew Hub & Customization State ────────────────────────────────────────
   const [curfewHubTab, setCurfewHubTab] = useState<'control' | 'history'>('control');
@@ -93,7 +95,7 @@ export default function WardenDashboard() {
   const [startingCurfew, setStartingCurfew] = useState(false);
   const [endingCurfew, setEndingCurfew] = useState(false);
 
-  // ── Curfew History & Violation Audit Log ────────────────────────────────────
+  // ── Curfew History ──────────────────────────────────────────────────────────
   const [historySubTab, setHistorySubTab] = useState<'sessions' | 'violations'>('sessions');
   const [curfewSessions, setCurfewSessions] = useState<any[]>([]);
   const [curfewViolationHistory, setCurfewViolationHistory] = useState<any[]>([]);
@@ -101,16 +103,58 @@ export default function WardenDashboard() {
   const [historySearch, setHistorySearch] = useState('');
   const [historyDateFilter, setHistoryDateFilter] = useState('');
 
-  // ── Emergency Broadcast State ───────────────────────────────────────────────
-  const [emergencyForm, setEmergencyForm] = useState({
+  // ── Quick Action Modals State ────────────────────────────────────────────────
+  const [markAttendanceModal, setMarkAttendanceModal] = useState({
+    open: false,
+    studentId: '',
+    status: 'inside',
+    notes: '',
+  });
+
+  const [addVisitorModal, setAddVisitorModal] = useState({
+    open: false,
+    visitorName: '',
+    visitorPhone: '',
+    visitorIdProof: '',
+    visitingStudentId: '',
+    purpose: '',
+    autoApprove: true,
+  });
+
+  const [announcementModal, setAnnouncementModal] = useState({
+    open: false,
     title: '',
     message: '',
-    priority: 'high',
-    targetRoles: { owner: true, warden: true, student: true },
+    targetAudience: 'all',
+    priority: 'medium',
   });
-  const [broadcasting, setBroadcasting] = useState(false);
 
-  // ── Modals State ────────────────────────────────────────────────────────────
+  const [maintenanceModal, setMaintenanceModal] = useState({
+    open: false,
+    title: '',
+    description: '',
+    roomId: '',
+    priority: 'medium',
+  });
+
+  const [incidentModal, setIncidentModal] = useState({
+    open: false,
+    studentId: '',
+    violationType: 'late-entry',
+    description: '',
+    warningLevel: 'warning',
+    fineAmount: 0,
+  });
+
+  const [complaintResolveModal, setComplaintResolveModal] = useState({
+    open: false,
+    complaintId: '',
+    title: '',
+    status: 'resolved',
+    resolutionNotes: '',
+  });
+
+  // ── Detail & Confirmation Modals State ───────────────────────────────────────
   const [rejectModal, setRejectModal] = useState<{
     open: boolean;
     type: 'permission' | 'visitor';
@@ -149,9 +193,9 @@ export default function WardenDashboard() {
       const response = await api.getDashboard();
       const d = response.data || {};
       setDashboard(d);
-      setPermissions(d.permissions || []);
-      setViolations(d.violations || []);
-      setVisitors(d.visitors || []);
+      setPermissions(d.permissions || d.leaveOverview?.pendingList || []);
+      setViolations(d.violations || d.disciplineOverview?.recentIncidents || []);
+      setVisitors(d.visitors || d.visitorOverview?.recentVisitors || []);
 
       if (d.curfewStatus) {
         setCurfewConfig((prev) => ({
@@ -172,12 +216,40 @@ export default function WardenDashboard() {
     }
   }, []);
 
+  // ── Load Hostel Students (for Quick Action Selectors) ───────────────────────
+  const loadStudents = useCallback(async () => {
+    try {
+      const res = await api.getWardenHostelStudents();
+      if (res?.data) {
+        setHostelStudents(res.data);
+      }
+    } catch (err) {
+      console.warn('Could not load hostel students list:', err);
+    }
+  }, []);
+
+  // ── Load Complaints ─────────────────────────────────────────────────────────
+  const loadComplaints = useCallback(async () => {
+    try {
+      const res = await api.getWardenComplaints({
+        type: complaintTypeFilter !== 'all' ? complaintTypeFilter : undefined,
+        status: complaintStatusFilter !== 'all' ? complaintStatusFilter : undefined,
+      });
+      if (res?.data) {
+        setComplaintsList(res.data);
+      }
+    } catch (err) {
+      console.warn('Failed to load complaints:', err);
+    }
+  }, [complaintTypeFilter, complaintStatusFilter]);
+
   // ── Load Curfew History ─────────────────────────────────────────────────────
   const loadCurfewHistory = useCallback(async () => {
-    if (!user?.hostelId) return;
+    const effectiveHostelId = dashboard?.hostel?.id || user?.hostelId;
+    if (!effectiveHostelId) return;
     setLoadingHistory(true);
     try {
-      const res = await alertApi.getCurfewHistory(user.hostelId, {
+      const res = await alertApi.getCurfewHistory(effectiveHostelId, {
         date: historyDateFilter || undefined,
         search: historySearch || undefined,
       });
@@ -189,7 +261,7 @@ export default function WardenDashboard() {
     } finally {
       setLoadingHistory(false);
     }
-  }, [user?.hostelId, historyDateFilter, historySearch]);
+  }, [dashboard?.hostel?.id, user?.hostelId, historyDateFilter, historySearch]);
 
   useEffect(() => {
     if (!user || user.role !== 'warden') {
@@ -197,55 +269,35 @@ export default function WardenDashboard() {
       return;
     }
     loadDashboard();
-  }, [user, router, loadDashboard]);
+    loadStudents();
+  }, [user, router, loadDashboard, loadStudents]);
 
-  // Refresh data on real-time curfew socket events
+  useEffect(() => {
+    if (activeTab === 'curfew') {
+      loadCurfewHistory();
+    } else if (activeTab === 'complaints') {
+      loadComplaints();
+    }
+  }, [activeTab, loadCurfewHistory, loadComplaints]);
+
+  // Refresh on socket curfew events
   useEffect(() => {
     if (lastCurfewEvent) {
-      if (lastCurfewEvent.type === 'curfew:ended') {
-        setDashboard((prev: any) => prev ? ({
-          ...prev,
-          curfewStatus: {
-            ...prev.curfewStatus,
-            isCurfewActive: false,
-            isManualCurfewActive: false,
-            manualCurfewEndedAt: lastCurfewEvent.data?.manualCurfewEndedAt || new Date().toISOString(),
-          },
-        }) : prev);
-      } else if (lastCurfewEvent.type === 'curfew:sweep_completed') {
-        setDashboard((prev: any) => prev ? ({
-          ...prev,
-          curfewStatus: {
-            ...prev.curfewStatus,
-            isCurfewActive: true,
-            isManualCurfewActive: true,
-            manualCurfewEndedAt: null,
-          },
-        }) : prev);
-      }
       loadDashboard();
-      if (activeCard === 'curfew') {
+      if (activeTab === 'curfew') {
         loadCurfewHistory();
       }
     }
-  }, [lastCurfewEvent, activeCard, loadDashboard, loadCurfewHistory]);
+  }, [lastCurfewEvent, activeTab, loadDashboard, loadCurfewHistory]);
 
-  useEffect(() => {
-    if (activeCard === 'curfew') {
-      loadCurfewHistory();
-    }
-  }, [activeCard, loadCurfewHistory]);
-
-  // ── Permission Action Handlers ──────────────────────────────────────────────
+  // ── Permission Actions ──────────────────────────────────────────────────────
   const handleApprovePermission = async (id: string) => {
     setActionLoading(id);
     try {
       await api.approvePermission(id);
       toast.success('Permission approved & student notified');
       setPermissions((prev) => prev.filter((p) => p._id !== id));
-      if (dashboard) {
-        setDashboard({ ...dashboard, pendingPermissions: Math.max(0, dashboard.pendingPermissions - 1) });
-      }
+      loadDashboard();
     } catch (error: any) {
       toast.error(error.message || 'Failed to approve permission');
     } finally {
@@ -266,18 +318,13 @@ export default function WardenDashboard() {
         await api.rejectPermission(rejectModal.id, rejectModal.reason.trim());
         toast.success('Permission rejected & student notified');
         setPermissions((prev) => prev.filter((p) => p._id !== rejectModal.id));
-        if (dashboard) {
-          setDashboard({ ...dashboard, pendingPermissions: Math.max(0, dashboard.pendingPermissions - 1) });
-        }
       } else {
         await api.rejectVisitor(rejectModal.id, rejectModal.reason.trim());
         toast.success('Visitor request rejected');
         setVisitors((prev) => prev.filter((v) => v._id !== rejectModal.id));
-        if (dashboard) {
-          setDashboard({ ...dashboard, pendingVisitors: Math.max(0, dashboard.pendingVisitors - 1) });
-        }
       }
       setRejectModal({ open: false, type: 'permission', id: '', studentOrVisitorName: '', reason: '' });
+      loadDashboard();
     } catch (error: any) {
       toast.error(error.message || 'Action failed');
     } finally {
@@ -295,29 +342,21 @@ export default function WardenDashboard() {
         await api.deletePermission(id);
         toast.success('Permission request deleted');
         setPermissions((prev) => prev.filter((p) => p._id !== id));
-        if (dashboard) {
-          setDashboard({ ...dashboard, pendingPermissions: Math.max(0, dashboard.pendingPermissions - 1) });
-        }
       } else if (type === 'violation') {
         await api.deleteViolation(id);
         toast.success('Violation record deleted');
         setViolations((prev) => prev.filter((v) => v._id !== id));
-        if (dashboard) {
-          setDashboard({ ...dashboard, activeViolations: Math.max(0, dashboard.activeViolations - 1) });
-        }
       } else if (type === 'visitor') {
         await api.deleteVisitor(id);
         toast.success('Visitor entry deleted');
         setVisitors((prev) => prev.filter((v) => v._id !== id));
-        if (dashboard) {
-          setDashboard({ ...dashboard, pendingVisitors: Math.max(0, dashboard.pendingVisitors - 1) });
-        }
       } else if (type === 'curfew') {
         await alertApi.deleteCurfewViolation(id);
-        toast.success('Curfew record deleted from history');
+        toast.success('Curfew record deleted');
         setCurfewViolationHistory((prev) => prev.filter((v) => v._id !== id));
       }
       setDeleteConfirmModal({ open: false, type: 'permission', id: '', description: '' });
+      loadDashboard();
     } catch (error: any) {
       toast.error(error.message || 'Failed to delete record');
     } finally {
@@ -325,7 +364,48 @@ export default function WardenDashboard() {
     }
   };
 
-  // ── Violation Action Handlers ───────────────────────────────────────────────
+  // ── Visitor Actions ─────────────────────────────────────────────────────────
+  const handleApproveVisitor = async (id: string) => {
+    setActionLoading(id);
+    try {
+      await api.approveVisitor(id);
+      toast.success('Visitor entry approved & checked in');
+      loadDashboard();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to approve visitor');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleCheckoutVisitor = async (id: string) => {
+    setActionLoading(id);
+    try {
+      await api.checkoutWardenVisitor(id);
+      toast.success('Visitor successfully checked out');
+      loadDashboard();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to checkout visitor');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // ── Emergency Actions ───────────────────────────────────────────────────────
+  const handleAcknowledgeEmergency = async (id: string) => {
+    setActionLoading(id);
+    try {
+      await api.acknowledgeEmergency(id);
+      toast.success('Emergency alert acknowledged');
+      loadDashboard();
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to acknowledge emergency');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // ── Violation Actions ───────────────────────────────────────────────────────
   const handleResolveViolation = async (violation: any) => {
     setActionLoading(violation._id);
     try {
@@ -336,9 +416,7 @@ export default function WardenDashboard() {
       }
       toast.success('Violation resolved successfully');
       setViolations((prev) => prev.filter((v) => v._id !== violation._id));
-      if (dashboard) {
-        setDashboard({ ...dashboard, activeViolations: Math.max(0, dashboard.activeViolations - 1) });
-      }
+      loadDashboard();
     } catch (error: any) {
       toast.error(error.message || 'Failed to resolve violation');
     } finally {
@@ -351,7 +429,7 @@ export default function WardenDashboard() {
     setActionLoading(escalateModal.id);
     try {
       await api.escalateViolation(escalateModal.id, { escalateTo: 'owner' });
-      toast.success(`Escalated violation for ${escalateModal.studentName} to Owner`);
+      toast.success('Violation escalated to Management');
       setEscalateModal({ open: false, id: '', studentName: '', reason: '' });
       loadDashboard();
     } catch (error: any) {
@@ -361,209 +439,271 @@ export default function WardenDashboard() {
     }
   };
 
-  // ── Visitor Action Handlers ─────────────────────────────────────────────────
-  const handleApproveVisitor = async (id: string) => {
-    setActionLoading(id);
+  // ── Quick Action Submit Handlers ────────────────────────────────────────────
+  const handleMarkAttendanceSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!markAttendanceModal.studentId) {
+      toast.error('Please select a student');
+      return;
+    }
+    setActionLoading('markAttendance');
     try {
-      await api.approveVisitor(id);
-      toast.success('Visitor approved & checked in');
-      setVisitors((prev) => prev.filter((v) => v._id !== id));
-      if (dashboard) {
-        setDashboard({ ...dashboard, pendingVisitors: Math.max(0, dashboard.pendingVisitors - 1) });
-      }
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to approve visitor');
+      await api.markWardenAttendance({
+        studentId: markAttendanceModal.studentId,
+        status: markAttendanceModal.status,
+        notes: markAttendanceModal.notes,
+      });
+      toast.success('Student attendance updated successfully');
+      setMarkAttendanceModal({ open: false, studentId: '', status: 'inside', notes: '' });
+      loadDashboard();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update attendance');
     } finally {
       setActionLoading(null);
     }
   };
 
-  // ── Curfew Operations Handlers ──────────────────────────────────────────────
-  const handleStartCurfewNow = async () => {
-    if (!user?.hostelId) return;
+  const handleAddVisitorSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const { visitorName, visitorPhone, visitingStudentId, purpose } = addVisitorModal;
+    if (!visitorName.trim() || !visitorPhone.trim() || !visitingStudentId || !purpose.trim()) {
+      toast.error('Please complete all required fields');
+      return;
+    }
+    setActionLoading('addVisitor');
+    try {
+      await api.createWardenVisitor(addVisitorModal);
+      toast.success(addVisitorModal.autoApprove ? 'Visitor added & checked in' : 'Visitor pass created');
+      setAddVisitorModal({
+        open: false,
+        visitorName: '',
+        visitorPhone: '',
+        visitorIdProof: '',
+        visitingStudentId: '',
+        purpose: '',
+        autoApprove: true,
+      });
+      loadDashboard();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to add visitor');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleAnnouncementSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const { title, message } = announcementModal;
+    if (!title.trim() || !message.trim()) {
+      toast.error('Please provide announcement title and message');
+      return;
+    }
+    setActionLoading('announcement');
+    try {
+      await api.createWardenAnnouncement(announcementModal);
+      toast.success('Announcement broadcasted to hostel');
+      setAnnouncementModal({ open: false, title: '', message: '', targetAudience: 'all', priority: 'medium' });
+      loadDashboard();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to create announcement');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleMaintenanceSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const { title, description } = maintenanceModal;
+    if (!title.trim() || !description.trim()) {
+      toast.error('Please provide maintenance title and description');
+      return;
+    }
+    setActionLoading('maintenance');
+    try {
+      await api.reportWardenMaintenance({
+        title,
+        description,
+        roomId: maintenanceModal.roomId || undefined,
+        priority: maintenanceModal.priority,
+      });
+      toast.success('Maintenance ticket submitted successfully');
+      setMaintenanceModal({ open: false, title: '', description: '', roomId: '', priority: 'medium' });
+      loadDashboard();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to report maintenance');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleIncidentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const { studentId, violationType, description } = incidentModal;
+    if (!studentId || !description.trim()) {
+      toast.error('Please select a student and provide a description');
+      return;
+    }
+    setActionLoading('incident');
+    try {
+      await api.createViolation({
+        studentId,
+        violationType,
+        description,
+        warningLevel: incidentModal.warningLevel,
+        fineAmount: Number(incidentModal.fineAmount) || 0,
+      });
+      toast.success('Disciplinary incident recorded');
+      setIncidentModal({
+        open: false,
+        studentId: '',
+        violationType: 'late-entry',
+        description: '',
+        warningLevel: 'warning',
+        fineAmount: 0,
+      });
+      loadDashboard();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to record incident');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleComplaintResolveSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionLoading('resolveComplaint');
+    try {
+      await api.updateWardenComplaintStatus(complaintResolveModal.complaintId, {
+        status: complaintResolveModal.status,
+        resolutionNotes: complaintResolveModal.resolutionNotes,
+      });
+      toast.success('Complaint status updated');
+      setComplaintResolveModal({ open: false, complaintId: '', title: '', status: 'resolved', resolutionNotes: '' });
+      loadDashboard();
+      if (activeTab === 'complaints') loadComplaints();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update complaint');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // ── Curfew Actions ──────────────────────────────────────────────────────────
+  const isCurfewActive = Boolean(dashboard?.curfewStatus?.isCurfewActive);
+
+  const handleStartCurfewSweep = async () => {
+    const effectiveHostelId = dashboard?.hostel?.id || user?.hostelId;
+    if (!effectiveHostelId) return;
     setStartingCurfew(true);
     try {
-      const res = await alertApi.startImmediateCurfew(user.hostelId);
-      toast.success(res.message || 'Curfew sweep started immediately! Presence verification active.', { duration: 5000 });
-      setDashboard((prev: any) => prev ? ({
-        ...prev,
-        curfewStatus: {
-          ...prev.curfewStatus,
-          isCurfewActive: true,
-          isManualCurfewActive: true,
-          manualCurfewEndedAt: null,
-        },
-      }) : prev);
-      await loadDashboard();
-      await loadCurfewHistory();
+      await alertApi.startImmediateCurfew(effectiveHostelId);
+      toast.success('Curfew sweep initiated successfully');
+      loadDashboard();
     } catch (error: any) {
-      toast.error(error.response?.data?.message || error.message || 'Failed to start curfew');
+      toast.error(error.message || 'Failed to trigger sweep');
     } finally {
       setStartingCurfew(false);
     }
   };
 
-  const handleEndCurfewNow = async () => {
-    if (!user?.hostelId) return;
+  const handleEndCurfew = async () => {
+    const effectiveHostelId = dashboard?.hostel?.id || user?.hostelId;
+    if (!effectiveHostelId) return;
     setEndingCurfew(true);
     try {
-      const res = await alertApi.endCurfew(user.hostelId, 'Ended manually by warden');
-      toast.success(res.message || 'Curfew session concluded successfully.', { duration: 5000 });
-      setDashboard((prev: any) => prev ? ({
-        ...prev,
-        curfewStatus: {
-          ...prev.curfewStatus,
-          isCurfewActive: false,
-          isManualCurfewActive: false,
-          manualCurfewEndedAt: new Date().toISOString(),
-        },
-      }) : prev);
-      await loadDashboard();
-      await loadCurfewHistory();
+      await alertApi.endCurfew(effectiveHostelId, 'Curfew terminated by Warden');
+      toast.success('Curfew ended successfully');
+      loadDashboard();
     } catch (error: any) {
-      toast.error(error.response?.data?.message || error.message || 'Failed to end curfew');
+      toast.error(error.message || 'Failed to end curfew');
     } finally {
       setEndingCurfew(false);
     }
   };
 
-  const handleSaveCurfewConfig = async () => {
-    if (!user?.hostelId) return;
-    setSavingConfig(true);
-    try {
-      const res = await alertApi.updateCurfewConfig(user.hostelId, curfewConfig);
-      toast.success(res.message || 'Curfew schedule & alert rules saved successfully');
-      await loadDashboard();
-    } catch (error: any) {
-      toast.error(error.response?.data?.message || error.message || 'Failed to save configuration');
-    } finally {
-      setSavingConfig(false);
-    }
-  };
-
-  const handleBroadcastEmergency = async () => {
-    if (!emergencyForm.title.trim() || !emergencyForm.message.trim()) {
-      toast.error('Title and message are required');
-      return;
-    }
-    const roles = Object.entries(emergencyForm.targetRoles)
-      .filter(([, v]) => v)
-      .map(([r]) => r);
-    if (roles.length === 0) {
-      toast.error('Select at least one recipient group');
-      return;
-    }
-    if (!user?.hostelId) return;
-
-    setBroadcasting(true);
-    try {
-      await alertApi.sendToAllRoles({
-        title: emergencyForm.title,
-        message: emergencyForm.message,
-        priority: emergencyForm.priority as any,
-        hostelId: user.hostelId,
-        targetRoles: roles,
-        type: 'ANNOUNCEMENT',
-      });
-      toast.success('Emergency alert dispatched to network');
-      setEmergencyForm({
-        title: '',
-        message: '',
-        priority: 'high',
-        targetRoles: { owner: true, warden: true, student: true },
-      });
-    } catch (error: any) {
-      toast.error(error.response?.data?.message || error.message || 'Broadcast failed');
-    } finally {
-      setBroadcasting(false);
-    }
-  };
-
-  // ── Filtered Datasets ───────────────────────────────────────────────────────
+  // ── Filters & Search ────────────────────────────────────────────────────────
   const filteredPermissions = permissions.filter((p) => {
-    const studentName = p.studentId?.name || '';
-    const room = p.studentId?.roomId || '';
-    const matchesSearch =
-      studentName.toLowerCase().includes(permSearch.toLowerCase()) ||
-      String(room).toLowerCase().includes(permSearch.toLowerCase()) ||
-      (p.reason || '').toLowerCase().includes(permSearch.toLowerCase());
-    const matchesType = permTypeFilter === 'all' || p.permissionType === permTypeFilter;
-    return matchesSearch && matchesType;
+    const matchSearch =
+      !permSearch ||
+      p.studentId?.name?.toLowerCase().includes(permSearch.toLowerCase()) ||
+      p.studentId?.roomId?.toLowerCase().includes(permSearch.toLowerCase()) ||
+      p.reason?.toLowerCase().includes(permSearch.toLowerCase());
+    const matchType = permTypeFilter === 'all' || p.permissionType === permTypeFilter;
+    return matchSearch && matchType;
   });
 
   const filteredViolations = violations.filter((v) => {
-    const studentName = v.studentId?.name || '';
-    const room = v.studentId?.roomId || v.roomNumber || '';
-    const desc = v.description || v.violationType || '';
-    const matchesSearch =
-      studentName.toLowerCase().includes(violSearch.toLowerCase()) ||
-      String(room).toLowerCase().includes(violSearch.toLowerCase()) ||
-      desc.toLowerCase().includes(violSearch.toLowerCase());
-    const matchesType =
-      violTypeFilter === 'all' ||
-      (violTypeFilter === 'curfew' && (v.isCurfew || v.violationType === 'curfew')) ||
-      (violTypeFilter === 'disciplinary' && !v.isCurfew && v.violationType !== 'curfew');
-    return matchesSearch && matchesType;
+    const matchSearch =
+      !violSearch ||
+      v.studentId?.name?.toLowerCase().includes(violSearch.toLowerCase()) ||
+      v.studentId?.roomId?.toLowerCase().includes(violSearch.toLowerCase()) ||
+      v.description?.toLowerCase().includes(violSearch.toLowerCase());
+    const matchType = violTypeFilter === 'all' || (violTypeFilter === 'curfew' ? v.isCurfew : !v.isCurfew);
+    return matchSearch && matchType;
   });
 
   const filteredVisitors = visitors.filter((v) => {
-    const visitorName = v.visitorName || '';
-    const phone = v.visitorPhone || '';
-    const studentName = v.visitingStudentId?.name || '';
     return (
-      visitorName.toLowerCase().includes(visitorSearch.toLowerCase()) ||
-      phone.includes(visitorSearch) ||
-      studentName.toLowerCase().includes(visitorSearch.toLowerCase())
+      !visitorSearch ||
+      v.visitorName?.toLowerCase().includes(visitorSearch.toLowerCase()) ||
+      v.visitorPhone?.includes(visitorSearch) ||
+      v.visitingStudentId?.name?.toLowerCase().includes(visitorSearch.toLowerCase()) ||
+      v.purpose?.toLowerCase().includes(visitorSearch.toLowerCase())
     );
   });
 
-  const curfewStatus = dashboard?.curfewStatus;
-  const isCurfewActive = Boolean(curfewStatus?.isCurfewActive || curfewStatus?.isManualCurfewActive);
+  const studentStats = dashboard?.studentStats || { total: 0, active: 0, onLeave: 0, absent: 0 };
+  const roomStats = dashboard?.roomStats || { totalRooms: 0, occupiedRooms: 0, partiallyOccupiedRooms: 0, vacantRooms: 0, maintenanceRooms: 0, totalCapacity: 0, totalOccupancy: 0, occupancyRate: 0 };
+  const attendanceOverview = dashboard?.attendanceOverview || { presentToday: 0, absentToday: 0, lateArrivals: 0, attendancePercentage: 0 };
+  const leaveOverview = dashboard?.leaveOverview || { pendingApplications: 0, approvedLeaves: 0, studentsOutside: 0, overdueReturns: 0 };
+  const complaintOverview = dashboard?.complaintOverview || { newComplaints: 0, pendingComplaints: 0, inProgressComplaints: 0, resolvedComplaints: 0, highPriorityComplaints: 0 };
+  const maintenanceOverview = dashboard?.maintenanceOverview || { newRequests: 0, pendingRequests: 0, inProgressRepairs: 0, completedRepairs: 0, emergencyMaintenance: 0 };
+  const visitorOverview = dashboard?.visitorOverview || { todayVisitors: 0, currentInside: 0, pendingRequests: 0 };
+  const disciplineOverview = dashboard?.disciplineOverview || { recentIncidents: [], studentsWithIssues: 0, pendingDisciplinaryActions: 0, curfewViolationsCount: 0 };
+  const emergencyOverview = dashboard?.emergencyOverview || { activeEmergencies: [], hasActiveEmergency: false, recentIncidents: [] };
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
-      {/* ── TOP HEADER WITH LIVE COMPLETE TIME ─────────────────────────────── */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 sm:p-6">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5">
-          {/* Warden Identity */}
-          <div>
-            <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-600 to-indigo-700 flex items-center justify-center text-white shadow-md shadow-indigo-100">
-                <Shield className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-xl sm:text-2xl font-extrabold text-gray-900 tracking-tight">
-                    Warden Control Dashboard
-                  </h1>
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                    Hostel Oversight
-                  </span>
-                </div>
-                <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
-                  Logged in as <span className="font-semibold text-gray-800">{user?.name || 'Warden'}</span> • Hostel ID: {user?.hostelId || 'Assigned'}
-                </p>
-              </div>
+    <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
+      {/* ── 1. EXECUTIVE COMMAND HEADER ────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl border border-gray-200/80 shadow-xs p-5 sm:p-6">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+          {/* Title & Hostel Badge */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200/60 flex items-center gap-1.5">
+                <Shield className="w-3.5 h-3.5" />
+                Warden Operations Center
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 flex items-center gap-1">
+                <Building className="w-3.5 h-3.5 text-gray-500" />
+                {dashboard?.hostel?.name || user?.hostelName || 'Main Campus Hostel'}
+              </span>
             </div>
+            <h1 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
+              Hostel Overview & Control
+            </h1>
+            <p className="text-xs sm:text-sm text-gray-500">
+              Real-time operational monitoring for student attendance, rooms, safety, leaves, and discipline.
+            </p>
           </div>
 
-          {/* Complete Live Time Widget & Status */}
+          {/* Clock, Live Socket & Refresh */}
           <div className="flex flex-wrap items-center gap-3">
             {/* Live Clock Card */}
-            <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white px-4 py-2.5 rounded-xl shadow-sm border border-slate-800 flex items-center gap-3">
+            <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white px-4 py-2 rounded-xl shadow-xs border border-slate-800 flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-indigo-300">
                 <Clock className="w-4 h-4" />
               </div>
               <div>
-                <div className="text-[11px] font-medium text-slate-300 flex items-center gap-1.5">
+                <div className="text-[10px] font-medium text-slate-300 flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                   <span>
                     {currentTime
-                      ? currentTime.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })
-                      : 'Loading Date...'}
+                      ? currentTime.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+                      : 'Syncing date...'}
                   </span>
                 </div>
-                <div className="text-base sm:text-lg font-mono font-bold text-white tracking-wider">
+                <div className="text-base font-mono font-bold text-white tracking-wider">
                   {currentTime
                     ? currentTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })
                     : '--:--:--'}
@@ -571,18 +711,22 @@ export default function WardenDashboard() {
               </div>
             </div>
 
-            {/* Live Socket Network Indicator */}
-            <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 px-3 py-2.5 rounded-xl">
+            {/* Network Indicator */}
+            <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 px-3 py-2 rounded-xl">
               <span className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`} />
               <div className="text-left">
-                <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Network</p>
-                <p className="text-xs font-semibold text-gray-800">{connected ? 'Live Sync' : 'Reconnecting'}</p>
+                <p className="text-[10px] uppercase font-bold text-gray-400">Network</p>
+                <p className="text-xs font-semibold text-gray-800">{connected ? 'Live Sync' : 'Connecting'}</p>
               </div>
             </div>
 
             {/* Refresh Button */}
             <button
-              onClick={loadDashboard}
+              onClick={() => {
+                loadDashboard();
+                loadStudents();
+                toast.success('Dashboard refreshed');
+              }}
               disabled={loading}
               title="Refresh Dashboard Data"
               className="p-2.5 text-gray-600 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-xl transition-colors flex items-center justify-center disabled:opacity-50"
@@ -591,133 +735,654 @@ export default function WardenDashboard() {
             </button>
           </div>
         </div>
+
+        {/* ── QUICK ACTION BAR (Requirement 10) ────────────────────────────────── */}
+        <div className="mt-5 pt-4 border-t border-gray-100 flex items-center justify-between gap-2 overflow-x-auto pb-1">
+          <span className="text-xs font-bold uppercase tracking-wider text-gray-400 shrink-0 hidden sm:inline">
+            Quick Actions:
+          </span>
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+            <button
+              onClick={() => setMarkAttendanceModal({ ...markAttendanceModal, open: true })}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors flex items-center gap-1.5 shrink-0"
+            >
+              <UserCheck className="w-3.5 h-3.5" />
+              Mark Attendance
+            </button>
+
+            <button
+              onClick={() => setActiveTab('permissions')}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors flex items-center gap-1.5 shrink-0"
+            >
+              <FileCheck className="w-3.5 h-3.5" />
+              Approve Leave {leaveOverview.pendingApplications > 0 && `(${leaveOverview.pendingApplications})`}
+            </button>
+
+            <button
+              onClick={() => setAddVisitorModal({ ...addVisitorModal, open: true })}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100 transition-colors flex items-center gap-1.5 shrink-0"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add Visitor
+            </button>
+
+            <button
+              onClick={() => setAnnouncementModal({ ...announcementModal, open: true })}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors flex items-center gap-1.5 shrink-0"
+            >
+              <Megaphone className="w-3.5 h-3.5" />
+              Announcement
+            </button>
+
+            <button
+              onClick={() => setMaintenanceModal({ ...maintenanceModal, open: true })}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors flex items-center gap-1.5 shrink-0"
+            >
+              <Wrench className="w-3.5 h-3.5" />
+              Report Maintenance
+            </button>
+
+            <button
+              onClick={() => setIncidentModal({ ...incidentModal, open: true })}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 transition-colors flex items-center gap-1.5 shrink-0"
+            >
+              <AlertTriangle className="w-3.5 h-3.5" />
+              Record Incident
+            </button>
+
+            <button
+              onClick={() => setActiveTab('complaints')}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors flex items-center gap-1.5 shrink-0"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              View Complaints
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* ── 4 PRIMARY CLICKABLE CARDS ──────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
-        {/* Card 1: Pending Permissions */}
-        <button
-          onClick={() => setActiveCard('permissions')}
-          className={`text-left p-5 rounded-2xl border transition-all duration-200 relative overflow-hidden bg-white ${
-            activeCard === 'permissions'
-              ? 'border-amber-400 shadow-md ring-2 ring-amber-400/20 bg-amber-50/20'
-              : 'border-gray-200/80 hover:border-amber-300 hover:shadow-sm'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-amber-700">1. Pending Permissions</span>
-            <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shadow-xs">
-              <FileCheck className="w-5 h-5" />
+      {/* ── 2. ACTIVE EMERGENCY & CRITICAL NOTIFICATION BANNER (Requirement 9) ── */}
+      {emergencyOverview.hasActiveEmergency && (
+        <div className="bg-gradient-to-r from-rose-600 to-red-700 text-white p-4 rounded-2xl shadow-md animate-pulse flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+              <AlertOctagon className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-rose-100">CRITICAL SAFETY ALERT</p>
+              <p className="text-sm sm:text-base font-bold">
+                {emergencyOverview.activeEmergencies.length} Active Emergency Alert(s) Detected! Immediate response required.
+              </p>
+              <p className="text-xs text-rose-100 mt-0.5">
+                {emergencyOverview.activeEmergencies[0]?.raisedBy?.name} (Room {emergencyOverview.activeEmergencies[0]?.raisedBy?.roomId?.roomNumber || '—'}) - {emergencyOverview.activeEmergencies[0]?.description || 'SOS triggered'}
+              </p>
             </div>
           </div>
-          <p className="text-3xl font-black text-gray-900 mt-3">
-            {dashboard?.pendingPermissions ?? (loading ? '...' : 0)}
-          </p>
-          <div className="mt-2 flex items-center justify-between text-xs">
-            <span className="text-amber-700 font-medium">Leave & Outpass requests</span>
-            <span className="font-semibold text-amber-800 flex items-center gap-0.5">
-              Review <ChevronRight className="w-3.5 h-3.5" />
-            </span>
+          <button
+            onClick={() => handleAcknowledgeEmergency(emergencyOverview.activeEmergencies[0]._id)}
+            disabled={actionLoading === emergencyOverview.activeEmergencies[0]._id}
+            className="px-4 py-2 bg-white text-rose-700 rounded-xl text-xs font-bold hover:bg-rose-50 transition-colors shrink-0 shadow-sm"
+          >
+            {actionLoading === emergencyOverview.activeEmergencies[0]._id ? 'Acknowledging...' : 'Acknowledge Now'}
+          </button>
+        </div>
+      )}
+
+      {/* Overdue Returns Alert Banner */}
+      {leaveOverview.overdueReturns > 0 && (
+        <div className="bg-amber-50 border border-amber-300/80 rounded-2xl p-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <p className="text-xs font-bold uppercase text-amber-800">Leave Return Overdue</p>
+              <p className="text-sm font-semibold text-amber-900">
+                {leaveOverview.overdueReturns} student(s) have not checked in after their approved leave return time.
+              </p>
+            </div>
           </div>
+          <button
+            onClick={() => setActiveTab('violations')}
+            className="px-3 py-1.5 bg-amber-600 text-white rounded-xl text-xs font-bold hover:bg-amber-700 transition-colors shrink-0"
+          >
+            Check Violations
+          </button>
+        </div>
+      )}
+
+      {/* ── NAVIGATION TABS ─────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 border-b border-gray-200 overflow-x-auto pb-2">
+        <button
+          onClick={() => setActiveTab('overview')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shrink-0 ${
+            activeTab === 'overview'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          Operational Overview
         </button>
 
-        {/* Card 2: Active Violations */}
         <button
-          onClick={() => setActiveCard('violations')}
-          className={`text-left p-5 rounded-2xl border transition-all duration-200 relative overflow-hidden bg-white ${
-            activeCard === 'violations'
-              ? 'border-rose-400 shadow-md ring-2 ring-rose-400/20 bg-rose-50/20'
-              : 'border-gray-200/80 hover:border-rose-300 hover:shadow-sm'
+          onClick={() => setActiveTab('permissions')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+            activeTab === 'permissions'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-gray-600 hover:bg-gray-100'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-rose-700">2. Active Violations</span>
-            <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shadow-xs">
-              <AlertTriangle className="w-5 h-5" />
-            </div>
-          </div>
-          <p className="text-3xl font-black text-gray-900 mt-3">
-            {dashboard?.activeViolations ?? (loading ? '...' : 0)}
-          </p>
-          <div className="mt-2 flex items-center justify-between text-xs">
-            <span className="text-rose-700 font-medium">Curfew breaches & disciplinary</span>
-            <span className="font-semibold text-rose-800 flex items-center gap-0.5">
-              Manage <ChevronRight className="w-3.5 h-3.5" />
+          Leave & Permissions
+          {leaveOverview.pendingApplications > 0 && (
+            <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-amber-400 text-amber-950 font-black">
+              {leaveOverview.pendingApplications}
             </span>
-          </div>
+          )}
         </button>
 
-        {/* Card 3: Pending Visitors */}
         <button
-          onClick={() => setActiveCard('visitors')}
-          className={`text-left p-5 rounded-2xl border transition-all duration-200 relative overflow-hidden bg-white ${
-            activeCard === 'visitors'
-              ? 'border-sky-400 shadow-md ring-2 ring-sky-400/20 bg-sky-50/20'
-              : 'border-gray-200/80 hover:border-sky-300 hover:shadow-sm'
+          onClick={() => setActiveTab('violations')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+            activeTab === 'violations'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-gray-600 hover:bg-gray-100'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-sky-700">3. Pending Visitors</span>
-            <div className="w-10 h-10 rounded-xl bg-sky-100 text-sky-700 flex items-center justify-center shadow-xs">
-              <Users className="w-5 h-5" />
-            </div>
-          </div>
-          <p className="text-3xl font-black text-gray-900 mt-3">
-            {dashboard?.pendingVisitors ?? (loading ? '...' : 0)}
-          </p>
-          <div className="mt-2 flex items-center justify-between text-xs">
-            <span className="text-sky-700 font-medium">Gate entry approval passes</span>
-            <span className="font-semibold text-sky-800 flex items-center gap-0.5">
-              Check-In <ChevronRight className="w-3.5 h-3.5" />
+          Discipline & Violations
+          {violations.length > 0 && (
+            <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-rose-500 text-white font-black">
+              {violations.length}
             </span>
-          </div>
+          )}
         </button>
 
-        {/* Card 4: Alert Networks & Curfew Hub */}
         <button
-          onClick={() => setActiveCard('curfew')}
-          className={`text-left p-5 rounded-2xl border transition-all duration-200 relative overflow-hidden ${
-            activeCard === 'curfew'
-              ? 'border-indigo-400 shadow-md ring-2 ring-indigo-400/20 bg-gradient-to-br from-indigo-900 to-slate-900 text-white'
-              : 'bg-gradient-to-br from-indigo-800 to-purple-900 text-white hover:shadow-md'
+          onClick={() => setActiveTab('visitors')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+            activeTab === 'visitors'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-gray-600 hover:bg-gray-100'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-indigo-200">4. Alert Networks</span>
-            <div className="w-10 h-10 rounded-xl bg-white/15 text-white flex items-center justify-center shadow-xs">
-              <ShieldAlert className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-center gap-2">
-            <span className={`w-3 h-3 rounded-full ${isCurfewActive ? 'bg-rose-400 animate-ping' : 'bg-emerald-400'}`} />
-            <p className="text-2xl font-black text-white">
-              {isCurfewActive ? 'Curfew Active' : 'Curfew Standby'}
-            </p>
-          </div>
-          <div className="mt-2 flex items-center justify-between text-xs text-indigo-200">
-            <span>{curfewConfig.curfewTime} - {curfewConfig.curfewEndTime}</span>
-            <span className="font-semibold text-white flex items-center gap-0.5">
-              Control <ChevronRight className="w-3.5 h-3.5" />
+          Visitor Registry
+          {visitorOverview.currentInside > 0 && (
+            <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-emerald-500 text-white font-black">
+              {visitorOverview.currentInside} in
             </span>
-          </div>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('complaints')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+            activeTab === 'complaints'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          Complaints & Maintenance
+          {complaintOverview.newComplaints > 0 && (
+            <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-indigo-200 text-indigo-900 font-black">
+              {complaintOverview.newComplaints}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('curfew')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
+            activeTab === 'curfew'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          Curfew Command Hub
+          <span className={`w-2 h-2 rounded-full ${isCurfewActive ? 'bg-rose-500 animate-ping' : 'bg-emerald-400'}`} />
         </button>
       </div>
 
-      {/* ── CARD 1 DETAIL VIEW: PENDING PERMISSIONS ────────────────────────── */}
-      {activeCard === 'permissions' && (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5 animate-in fade-in duration-200">
+      {/* ── TAB 1: OPERATIONAL OVERVIEW (10 DOMAINS) ────────────────────────── */}
+      {activeTab === 'overview' && (
+        <div className="space-y-6">
+          {/* ── ROW 1: PRIMARY 4 OPERATIONAL TILES ── */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+            {/* DOMAIN 1: Student Statistics */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs relative overflow-hidden flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-indigo-700">1. Student Statistics</span>
+                  <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                    <Users className="w-5 h-5" />
+                  </div>
+                </div>
+                <p className="text-3xl font-black text-gray-900 mt-2">{studentStats.total}</p>
+                <p className="text-xs text-gray-500">Total registered students</p>
+              </div>
+
+              <div className="mt-4 pt-3 border-t border-gray-100 grid grid-cols-3 gap-1 text-center">
+                <div className="bg-emerald-50 rounded-lg py-1 px-1">
+                  <p className="text-xs font-bold text-emerald-700">{studentStats.active}</p>
+                  <p className="text-[10px] text-emerald-600">Active</p>
+                </div>
+                <div className="bg-amber-50 rounded-lg py-1 px-1">
+                  <p className="text-xs font-bold text-amber-700">{studentStats.onLeave}</p>
+                  <p className="text-[10px] text-amber-600">On Leave</p>
+                </div>
+                <div className="bg-rose-50 rounded-lg py-1 px-1">
+                  <p className="text-xs font-bold text-rose-700">{studentStats.absent}</p>
+                  <p className="text-[10px] text-rose-600">Absent</p>
+                </div>
+              </div>
+            </div>
+
+            {/* DOMAIN 2: Room Statistics */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs relative overflow-hidden flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-sky-700">2. Room Capacity</span>
+                  <div className="w-9 h-9 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center">
+                    <BedDouble className="w-5 h-5" />
+                  </div>
+                </div>
+                <div className="flex items-baseline gap-2 mt-2">
+                  <p className="text-3xl font-black text-gray-900">{roomStats.totalRooms}</p>
+                  <span className="text-xs text-gray-500">Rooms ({roomStats.totalCapacity} beds)</span>
+                </div>
+                {/* Occupancy bar */}
+                <div className="mt-2 space-y-1">
+                  <div className="flex justify-between text-[11px] text-gray-600 font-medium">
+                    <span>Occupancy Rate</span>
+                    <span className="font-bold text-gray-900">{roomStats.occupancyRate}%</span>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-sky-500 h-2 rounded-full transition-all duration-500"
+                      style={{ width: `${Math.min(100, roomStats.occupancyRate)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 pt-2.5 border-t border-gray-100 grid grid-cols-4 gap-1 text-center text-[10px]">
+                <div className="bg-gray-50 rounded p-1">
+                  <p className="font-bold text-gray-900">{roomStats.occupiedRooms}</p>
+                  <p className="text-gray-500">Full</p>
+                </div>
+                <div className="bg-sky-50 rounded p-1">
+                  <p className="font-bold text-sky-700">{roomStats.partiallyOccupiedRooms}</p>
+                  <p className="text-sky-600">Partial</p>
+                </div>
+                <div className="bg-emerald-50 rounded p-1">
+                  <p className="font-bold text-emerald-700">{roomStats.vacantRooms}</p>
+                  <p className="text-emerald-600">Vacant</p>
+                </div>
+                <div className="bg-amber-50 rounded p-1">
+                  <p className="font-bold text-amber-700">{roomStats.maintenanceRooms}</p>
+                  <p className="text-amber-600">Maint.</p>
+                </div>
+              </div>
+            </div>
+
+            {/* DOMAIN 3: Attendance Overview */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs relative overflow-hidden flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-700">3. Attendance Today</span>
+                  <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                    <CheckCircle2 className="w-5 h-5" />
+                  </div>
+                </div>
+                <div className="flex items-baseline gap-2 mt-2">
+                  <p className="text-3xl font-black text-gray-900">{attendanceOverview.attendancePercentage}%</p>
+                  <span className="text-xs text-emerald-700 font-medium">{attendanceOverview.presentToday} present inside</span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Based on today's gate & verified check-ins</p>
+              </div>
+
+              <div className="mt-4 pt-3 border-t border-gray-100 grid grid-cols-3 gap-1 text-center">
+                <div className="bg-emerald-50 rounded-lg py-1 px-1">
+                  <p className="text-xs font-bold text-emerald-700">{attendanceOverview.presentToday}</p>
+                  <p className="text-[10px] text-emerald-600">Present</p>
+                </div>
+                <div className="bg-rose-50 rounded-lg py-1 px-1">
+                  <p className="text-xs font-bold text-rose-700">{attendanceOverview.absentToday}</p>
+                  <p className="text-[10px] text-rose-600">Absent</p>
+                </div>
+                <div className="bg-amber-50 rounded-lg py-1 px-1">
+                  <p className="text-xs font-bold text-amber-700">{attendanceOverview.lateArrivals}</p>
+                  <p className="text-[10px] text-amber-600">Late</p>
+                </div>
+              </div>
+            </div>
+
+            {/* DOMAIN 4: Leave Overview */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs relative overflow-hidden flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-700">4. Leave & Outpass</span>
+                  <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                    <FileCheck className="w-5 h-5" />
+                  </div>
+                </div>
+                <p className="text-3xl font-black text-gray-900 mt-2">{leaveOverview.pendingApplications}</p>
+                <p className="text-xs text-gray-500">Pending warden review</p>
+              </div>
+
+              <div className="mt-4 pt-3 border-t border-gray-100 grid grid-cols-3 gap-1 text-center">
+                <div className="bg-gray-50 rounded-lg py-1 px-1">
+                  <p className="text-xs font-bold text-gray-800">{leaveOverview.approvedLeaves}</p>
+                  <p className="text-[10px] text-gray-500">Approved</p>
+                </div>
+                <div className="bg-sky-50 rounded-lg py-1 px-1">
+                  <p className="text-xs font-bold text-sky-700">{leaveOverview.studentsOutside}</p>
+                  <p className="text-[10px] text-sky-600">Outside</p>
+                </div>
+                <div className="bg-rose-50 rounded-lg py-1 px-1">
+                  <p className="text-xs font-bold text-rose-700">{leaveOverview.overdueReturns}</p>
+                  <p className="text-[10px] text-rose-600">Overdue</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── ROW 2: SECONDARY 4 OPERATIONAL TILES ── */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+            {/* DOMAIN 5: Complaints Overview */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-purple-700">5. Complaints</span>
+                  <button
+                    onClick={() => setActiveTab('complaints')}
+                    className="text-xs text-purple-600 font-semibold hover:underline flex items-center gap-0.5"
+                  >
+                    View <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <p className="text-3xl font-black text-gray-900 mt-2">
+                  {complaintOverview.newComplaints + complaintOverview.inProgressComplaints}
+                </p>
+                <p className="text-xs text-gray-500">Active unresolved tickets</p>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-gray-100 space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">New / Unassigned:</span>
+                  <span className="font-bold text-purple-700">{complaintOverview.newComplaints}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">In Progress:</span>
+                  <span className="font-bold text-sky-700">{complaintOverview.inProgressComplaints}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">High Priority / Urgent:</span>
+                  <span className="font-bold text-rose-600">{complaintOverview.highPriorityComplaints}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Resolved Today:</span>
+                  <span className="font-bold text-emerald-600">{complaintOverview.resolvedComplaints}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* DOMAIN 6: Maintenance Overview */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-700">6. Maintenance</span>
+                  <button
+                    onClick={() => setMaintenanceModal({ ...maintenanceModal, open: true })}
+                    className="p-1 rounded-md bg-amber-50 text-amber-700 hover:bg-amber-100"
+                    title="Report Maintenance Ticket"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <p className="text-3xl font-black text-gray-900 mt-2">
+                  {maintenanceOverview.newRequests + maintenanceOverview.inProgressRepairs}
+                </p>
+                <p className="text-xs text-gray-500">Open repair tickets</p>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-gray-100 space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">New Requests:</span>
+                  <span className="font-bold text-amber-700">{maintenanceOverview.newRequests}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">In-Progress Repairs:</span>
+                  <span className="font-bold text-sky-700">{maintenanceOverview.inProgressRepairs}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Completed:</span>
+                  <span className="font-bold text-emerald-600">{maintenanceOverview.completedRepairs}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Emergency Maintenance:</span>
+                  <span className="font-bold text-rose-600">{maintenanceOverview.emergencyMaintenance}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* DOMAIN 7: Visitor Overview */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-teal-700">7. Visitor Registry</span>
+                  <button
+                    onClick={() => setAddVisitorModal({ ...addVisitorModal, open: true })}
+                    className="p-1 rounded-md bg-teal-50 text-teal-700 hover:bg-teal-100"
+                    title="Add Visitor Pass"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex items-baseline gap-2 mt-2">
+                  <p className="text-3xl font-black text-gray-900">{visitorOverview.currentInside}</p>
+                  <span className="text-xs text-emerald-700 font-semibold flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    inside now
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500">Hostel guests & visitors</p>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-gray-100 space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Today's Total Visitors:</span>
+                  <span className="font-bold text-gray-900">{visitorOverview.todayVisitors}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Currently Inside:</span>
+                  <span className="font-bold text-emerald-600">{visitorOverview.currentInside}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Pending Passes:</span>
+                  <span className="font-bold text-amber-600">{visitorOverview.pendingRequests}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* DOMAIN 8: Discipline & Curfew */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-rose-700">8. Discipline & Curfew</span>
+                  <button
+                    onClick={() => setActiveTab('curfew')}
+                    className="text-xs text-rose-600 font-semibold hover:underline flex items-center gap-0.5"
+                  >
+                    Hub <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex items-baseline gap-2 mt-2">
+                  <p className="text-3xl font-black text-gray-900">{disciplineOverview.studentsWithIssues}</p>
+                  <span className="text-xs text-rose-700">students flagged</span>
+                </div>
+                <p className="text-xs text-gray-500">Curfew breaches & violations</p>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-gray-100 space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Pending Actions:</span>
+                  <span className="font-bold text-rose-600">{disciplineOverview.pendingDisciplinaryActions}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Active Curfew Breaches:</span>
+                  <span className="font-bold text-rose-600">{disciplineOverview.curfewViolationsCount}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">Curfew Timing:</span>
+                  <span className="font-semibold text-gray-800 text-[11px]">{curfewConfig.curfewTime} - {curfewConfig.curfewEndTime}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── ROW 3: RECENT INCIDENTS & SAFETY FEED (DOMAIN 9) ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Safety & Emergency Log */}
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-5 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                    <ShieldAlert className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-gray-900">Safety & Incident Feed</h2>
+                    <p className="text-[11px] text-gray-500">Recent security, medical, and emergency notifications</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIncidentModal({ ...incidentModal, open: true })}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100"
+                >
+                  + Log Incident
+                </button>
+              </div>
+
+              {emergencyOverview.recentIncidents.length === 0 ? (
+                <div className="text-center py-8 bg-gray-50/60 rounded-xl border border-dashed border-gray-200">
+                  <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-1.5 opacity-80" />
+                  <p className="text-xs font-semibold text-gray-700">No Security Incidents</p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">The hostel perimeter and campus are secure.</p>
+                </div>
+              ) : (
+                <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                  {emergencyOverview.recentIncidents.map((inc: any) => (
+                    <div
+                      key={inc._id}
+                      className={`p-3 rounded-xl border flex items-start justify-between gap-3 text-xs ${
+                        inc.type === 'emergency'
+                          ? 'bg-rose-50/60 border-rose-200'
+                          : 'bg-gray-50/80 border-gray-200/70'
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              inc.type === 'emergency' ? 'bg-rose-600 text-white' : 'bg-gray-200 text-gray-700'
+                            }`}
+                          >
+                            {inc.type}
+                          </span>
+                          <span className="font-bold text-gray-900">{inc.title}</span>
+                        </div>
+                        <p className="text-gray-600">{inc.description}</p>
+                        <p className="text-[10px] text-gray-400">
+                          Student: {inc.studentName || '—'} | Room: {inc.roomNumber || '—'} | {new Date(inc.createdAt).toLocaleString()}
+                        </p>
+                      </div>
+                      {inc.status === 'active' && (
+                        <button
+                          onClick={() => handleAcknowledgeEmergency(inc._id)}
+                          className="px-2 py-1 rounded bg-rose-600 text-white text-[10px] font-bold shrink-0 hover:bg-rose-700"
+                        >
+                          Acknowledge
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Curfew Quick Control Widget */}
+            <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-5 shadow-xs flex flex-col justify-between space-y-4">
+              <div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Radio className="w-5 h-5 text-indigo-400" />
+                    <h2 className="text-sm font-bold text-white tracking-wide">Curfew Automation Hub</h2>
+                  </div>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                      isCurfewActive ? 'bg-rose-500 text-white animate-pulse' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    }`}
+                  >
+                    {isCurfewActive ? 'Curfew In Progress' : 'Curfew Standby'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-1">
+                  Automated checks run daily at {curfewConfig.curfewTime} with a {curfewConfig.gracePeriodMinutes}-minute grace period.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 bg-white/5 p-3 rounded-xl border border-white/10 text-xs">
+                <div>
+                  <p className="text-[10px] uppercase text-indigo-300">Scheduled Hours</p>
+                  <p className="font-bold text-white mt-0.5">{curfewConfig.curfewTime} - {curfewConfig.curfewEndTime}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase text-indigo-300">Grace Buffer</p>
+                  <p className="font-bold text-white mt-0.5">{curfewConfig.gracePeriodMinutes} minutes</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {isCurfewActive ? (
+                  <button
+                    onClick={handleEndCurfew}
+                    disabled={endingCurfew}
+                    className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <StopCircle className="w-4 h-4" />
+                    {endingCurfew ? 'Terminating...' : 'End Curfew Now'}
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleStartCurfewSweep}
+                    disabled={startingCurfew}
+                    className="flex-1 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <Play className="w-4 h-4" />
+                    {startingCurfew ? 'Initiating Sweep...' : 'Trigger Curfew Sweep'}
+                  </button>
+                )}
+                <button
+                  onClick={() => setActiveTab('curfew')}
+                  className="py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-colors"
+                >
+                  Configure
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── TAB 2: PERMISSIONS & LEAVE MANAGEMENT ───────────────────────────── */}
+      {activeTab === 'permissions' && (
+        <div className="bg-white rounded-2xl border border-gray-200/80 p-6 shadow-xs space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-4">
             <div>
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                 <FileCheck className="w-5 h-5 text-amber-600" />
-                Pending Student Leave & Outpass Permissions
+                Student Leave & Outpass Applications
               </h2>
-              <p className="text-xs text-gray-500">
-                Warden approval or rejection notifies the student immediately via alert socket.
-              </p>
+              <p className="text-xs text-gray-500">Review pending outpasses, overnight leaves, and emergency requests.</p>
             </div>
             {/* Search & Filter */}
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <div className="relative">
                 <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
@@ -725,7 +1390,7 @@ export default function WardenDashboard() {
                   placeholder="Search student or room..."
                   value={permSearch}
                   onChange={(e) => setPermSearch(e.target.value)}
-                  className="pl-9 pr-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  className="pl-9 pr-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/20"
                 />
               </div>
               <select
@@ -742,340 +1407,397 @@ export default function WardenDashboard() {
             </div>
           </div>
 
-          {/* Permissions List */}
           {filteredPermissions.length === 0 ? (
             <div className="text-center py-12 bg-gray-50/50 rounded-2xl border border-dashed border-gray-200">
               <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-2 opacity-80" />
-              <p className="text-sm font-semibold text-gray-800">No Pending Permissions Found</p>
+              <p className="text-sm font-semibold text-gray-800">No Pending Permissions</p>
               <p className="text-xs text-gray-500 mt-1">All student requests have been reviewed.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filteredPermissions.map((perm) => (
-                <div
-                  key={perm._id}
-                  className="p-4 rounded-xl border border-gray-100 bg-gradient-to-br from-white to-gray-50/50 shadow-xs hover:border-amber-200 transition-all flex flex-col justify-between space-y-3"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 mb-1">
-                        {perm.permissionType || 'Leave'}
-                      </span>
-                      <h3 className="font-bold text-gray-900 text-sm">{perm.studentId?.name || 'Student'}</h3>
-                      <p className="text-xs text-gray-500">
-                        Room: <span className="font-medium text-gray-700">{perm.studentId?.roomId || 'N/A'}</span> • Phone: {perm.studentId?.phone || 'N/A'}
-                      </p>
-                    </div>
-                    <span className="text-[11px] text-gray-400 font-mono">
-                      {new Date(perm.createdAt || Date.now()).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
-                    </span>
-                  </div>
-
-                  <div className="bg-white p-2.5 rounded-lg border border-gray-100 text-xs text-gray-600">
-                    <p className="font-medium text-gray-800 mb-0.5">Reason: {perm.reason || 'Not specified'}</p>
-                    {perm.requestedDate && (
-                      <p className="text-gray-500">
-                        Requested: {new Date(perm.requestedDate).toLocaleDateString('en-IN')}
-                        {perm.returnDate && ` • Return: ${new Date(perm.returnDate).toLocaleDateString('en-IN')}`}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Actions: Approve, Reject, Delete */}
-                  <div className="flex items-center justify-between pt-2 border-t border-gray-100 gap-2">
-                    <button
-                      onClick={() =>
-                        setDeleteConfirmModal({
-                          open: true,
-                          type: 'permission',
-                          id: perm._id,
-                          description: `Permission request for ${perm.studentId?.name || 'student'}`,
-                        })
-                      }
-                      title="Delete Request"
-                      disabled={actionLoading === perm._id}
-                      className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() =>
-                          setRejectModal({
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-gray-600">
+                <thead className="bg-gray-50 text-gray-700 uppercase font-semibold border-b border-gray-200">
+                  <tr>
+                    <th className="py-3 px-4">Student</th>
+                    <th className="py-3 px-4">Room</th>
+                    <th className="py-3 px-4">Type</th>
+                    <th className="py-3 px-4">Requested Date</th>
+                    <th className="py-3 px-4">Return Date</th>
+                    <th className="py-3 px-4">Reason</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredPermissions.map((p) => (
+                    <tr key={p._id} className="hover:bg-gray-50/80 transition-colors">
+                      <td className="py-3 px-4 font-semibold text-gray-900">
+                        {p.studentId?.name || 'Unknown'}
+                        <span className="block text-[10px] text-gray-400 font-normal">{p.studentId?.phone || p.studentId?.studentId}</span>
+                      </td>
+                      <td className="py-3 px-4">{p.studentId?.roomId || '—'}</td>
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 text-amber-800">
+                          {p.permissionType}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">{new Date(p.requestedDate).toLocaleDateString()}</td>
+                      <td className="py-3 px-4">{p.returnDate ? new Date(p.returnDate).toLocaleDateString() : '—'}</td>
+                      <td className="py-3 px-4 max-w-xs truncate" title={p.reason}>{p.reason}</td>
+                      <td className="py-3 px-4 text-right space-x-2">
+                        <button
+                          onClick={() => handleApprovePermission(p._id)}
+                          disabled={actionLoading === p._id}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          onClick={() => setRejectModal({
                             open: true,
                             type: 'permission',
-                            id: perm._id,
-                            studentOrVisitorName: perm.studentId?.name || 'Student',
+                            id: p._id,
+                            studentOrVisitorName: p.studentId?.name || 'Student',
                             reason: '',
-                          })
-                        }
-                        disabled={actionLoading === perm._id}
-                        className="px-3 py-1.5 text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors flex items-center gap-1"
-                      >
-                        <X className="w-3.5 h-3.5" /> Reject
-                      </button>
-                      <button
-                        onClick={() => handleApprovePermission(perm._id)}
-                        disabled={actionLoading === perm._id}
-                        className="px-3 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors flex items-center gap-1 disabled:opacity-50"
-                      >
-                        <Check className="w-3.5 h-3.5" /> Approve
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                          })}
+                          disabled={actionLoading === p._id}
+                          className="px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 font-bold hover:bg-rose-100"
+                        >
+                          Reject
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
       )}
 
-      {/* ── CARD 2 DETAIL VIEW: ACTIVE VIOLATIONS ──────────────────────────── */}
-      {activeCard === 'violations' && (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5 animate-in fade-in duration-200">
+      {/* ── TAB 3: VIOLATIONS & DISCIPLINARY LOG ─────────────────────────────── */}
+      {activeTab === 'violations' && (
+        <div className="bg-white rounded-2xl border border-gray-200/80 p-6 shadow-xs space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-4">
             <div>
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 text-rose-600" />
-                Active Violations & Incident Logs
+                Disciplinary & Curfew Breaches
               </h2>
-              <p className="text-xs text-gray-500">
-                Track open curfew breaches and disciplinary rule violations. Escalate critical items directly to Owner.
-              </p>
+              <p className="text-xs text-gray-500">Resolve warnings, escalate serious infractions, or log disciplinary fines.</p>
             </div>
-            {/* Search & Filter */}
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <div className="relative">
                 <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Search student or violation..."
+                  placeholder="Search student or description..."
                   value={violSearch}
                   onChange={(e) => setViolSearch(e.target.value)}
-                  className="pl-9 pr-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                  className="pl-9 pr-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none"
                 />
               </div>
-              <select
-                value={violTypeFilter}
-                onChange={(e) => setViolTypeFilter(e.target.value)}
-                className="py-1.5 px-3 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none"
+              <button
+                onClick={() => setIncidentModal({ ...incidentModal, open: true })}
+                className="px-3 py-1.5 bg-rose-600 text-white text-xs font-bold rounded-xl hover:bg-rose-700"
               >
-                <option value="all">All Violations</option>
-                <option value="curfew">Curfew Breaches Only</option>
-                <option value="disciplinary">Disciplinary Only</option>
-              </select>
+                + Record Incident
+              </button>
             </div>
           </div>
 
-          {/* Violations List */}
           {filteredViolations.length === 0 ? (
             <div className="text-center py-12 bg-gray-50/50 rounded-2xl border border-dashed border-gray-200">
               <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-2 opacity-80" />
-              <p className="text-sm font-semibold text-gray-800">No Active Violations</p>
-              <p className="text-xs text-gray-500 mt-1">Hostel premises are currently free of active violations.</p>
+              <p className="text-sm font-semibold text-gray-800">No Open Violations</p>
+              <p className="text-xs text-gray-500 mt-1">Hostel rules compliance is at 100%.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filteredViolations.map((v) => (
-                <div
-                  key={v._id}
-                  className="p-4 rounded-xl border border-gray-100 bg-gradient-to-br from-white to-gray-50/50 shadow-xs hover:border-rose-200 transition-all flex flex-col justify-between space-y-3"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <span
-                          className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${
-                            v.isCurfew || v.violationType === 'curfew'
-                              ? 'bg-rose-100 text-rose-800'
-                              : 'bg-indigo-100 text-indigo-800'
-                          }`}
-                        >
-                          {v.isCurfew || v.violationType === 'curfew' ? 'Curfew Breach' : v.violationType || 'Disciplinary'}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-gray-600">
+                <thead className="bg-gray-50 text-gray-700 uppercase font-semibold border-b border-gray-200">
+                  <tr>
+                    <th className="py-3 px-4">Student</th>
+                    <th className="py-3 px-4">Room</th>
+                    <th className="py-3 px-4">Type</th>
+                    <th className="py-3 px-4">Description</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredViolations.map((v) => (
+                    <tr key={v._id} className="hover:bg-gray-50/80 transition-colors">
+                      <td className="py-3 px-4 font-semibold text-gray-900">
+                        {v.studentId?.name || 'Unknown'}
+                        <span className="block text-[10px] text-gray-400">{v.studentId?.phone}</span>
+                      </td>
+                      <td className="py-3 px-4">{v.studentId?.roomId || '—'}</td>
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-rose-100 text-rose-800">
+                          {v.violationType || 'Breach'}
                         </span>
-                        {v.status === 'pending_recheck' && (
-                          <span className="bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.5 rounded font-semibold">
-                            Grace Period
-                          </span>
-                        )}
-                      </div>
-                      <h3 className="font-bold text-gray-900 text-sm">{v.studentId?.name || 'Student'}</h3>
-                      <p className="text-xs text-gray-500">
-                        Room: <span className="font-medium text-gray-700">{v.studentId?.roomId || v.roomNumber || 'N/A'}</span>
-                      </p>
-                    </div>
-                    <span className="text-[11px] text-gray-400 font-mono">
-                      {new Date(v.violationDate || v.createdAt || Date.now()).toLocaleTimeString('en-IN', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: true,
-                      })}
-                    </span>
-                  </div>
-
-                  <div className="bg-white p-2.5 rounded-lg border border-gray-100 text-xs text-gray-600">
-                    <p className="font-medium text-gray-800">{v.description || 'Violation logged by attendance or warden.'}</p>
-                    {v.fineAmount ? <p className="text-rose-600 font-semibold mt-1">Fine assessed: ₹{v.fineAmount}</p> : null}
-                  </div>
-
-                  {/* Actions: Resolve, Escalate, Delete */}
-                  <div className="flex items-center justify-between pt-2 border-t border-gray-100 gap-2">
-                    <button
-                      onClick={() =>
-                        setDeleteConfirmModal({
-                          open: true,
-                          type: 'violation',
-                          id: v._id,
-                          description: `Violation for ${v.studentId?.name || 'student'} (${v.violationType || 'incident'})`,
-                        })
-                      }
-                      title="Delete Record"
-                      disabled={actionLoading === v._id}
-                      className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() =>
-                          setEscalateModal({
+                      </td>
+                      <td className="py-3 px-4 max-w-sm truncate" title={v.description}>{v.description}</td>
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-100 text-amber-800">
+                          {v.status || 'Pending'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right space-x-2">
+                        <button
+                          onClick={() => handleResolveViolation(v)}
+                          disabled={actionLoading === v._id}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50"
+                        >
+                          Resolve
+                        </button>
+                        <button
+                          onClick={() => setEscalateModal({
                             open: true,
                             id: v._id,
                             studentName: v.studentId?.name || 'Student',
                             reason: '',
-                          })
-                        }
-                        disabled={actionLoading === v._id}
-                        className="px-2.5 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors flex items-center gap-1"
-                      >
-                        <ArrowUpRight className="w-3.5 h-3.5" /> Escalate
-                      </button>
-                      <button
-                        onClick={() => handleResolveViolation(v)}
-                        disabled={actionLoading === v._id}
-                        className="px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors flex items-center gap-1"
-                      >
-                        <Check className="w-3.5 h-3.5" /> Resolve
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                          })}
+                          disabled={actionLoading === v._id}
+                          className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 font-bold hover:bg-amber-100"
+                        >
+                          Escalate
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
       )}
 
-      {/* ── CARD 3 DETAIL VIEW: PENDING VISITORS ───────────────────────────── */}
-      {activeCard === 'visitors' && (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5 animate-in fade-in duration-200">
+      {/* ── TAB 4: VISITOR REGISTRY ─────────────────────────────────────────── */}
+      {activeTab === 'visitors' && (
+        <div className="bg-white rounded-2xl border border-gray-200/80 p-6 shadow-xs space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-4">
             <div>
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                 <Users className="w-5 h-5 text-sky-600" />
-                Pending Visitor Passes & Gate Approvals
+                Hostel Visitor Gate Registry
               </h2>
-              <p className="text-xs text-gray-500">
-                Grant gate check-in approval or reject visitor requests. All entries are archived in gate logs.
-              </p>
+              <p className="text-xs text-gray-500">Track entries, issue visitor passes, and checkout visitors leaving campus.</p>
             </div>
-            <div className="relative">
-              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Search visitor or student..."
-                value={visitorSearch}
-                onChange={(e) => setVisitorSearch(e.target.value)}
-                className="pl-9 pr-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
-              />
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Search visitor or student..."
+                  value={visitorSearch}
+                  onChange={(e) => setVisitorSearch(e.target.value)}
+                  className="pl-9 pr-3 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none"
+                />
+              </div>
+              <button
+                onClick={() => setAddVisitorModal({ ...addVisitorModal, open: true })}
+                className="px-3 py-1.5 bg-sky-600 text-white text-xs font-bold rounded-xl hover:bg-sky-700 flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add Visitor
+              </button>
             </div>
           </div>
 
-          {/* Visitors List */}
           {filteredVisitors.length === 0 ? (
             <div className="text-center py-12 bg-gray-50/50 rounded-2xl border border-dashed border-gray-200">
+              <Users className="w-10 h-10 text-gray-400 mx-auto mb-2 opacity-80" />
+              <p className="text-sm font-semibold text-gray-800">No Visitors Recorded</p>
+              <p className="text-xs text-gray-500 mt-1">No active or pending visitors for this hostel.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-gray-600">
+                <thead className="bg-gray-50 text-gray-700 uppercase font-semibold border-b border-gray-200">
+                  <tr>
+                    <th className="py-3 px-4">Visitor</th>
+                    <th className="py-3 px-4">Phone</th>
+                    <th className="py-3 px-4">Visiting Student</th>
+                    <th className="py-3 px-4">Purpose</th>
+                    <th className="py-3 px-4">Entry Time</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredVisitors.map((v) => {
+                    const isInside = v.entryTime != null && v.exitTime == null && v.status === 'approved';
+                    return (
+                      <tr key={v._id} className="hover:bg-gray-50/80 transition-colors">
+                        <td className="py-3 px-4 font-semibold text-gray-900">{v.visitorName}</td>
+                        <td className="py-3 px-4">{v.visitorPhone}</td>
+                        <td className="py-3 px-4">
+                          {v.visitingStudentId?.name || '—'}
+                          <span className="block text-[10px] text-gray-400">Room {v.visitingStudentId?.roomId || '—'}</span>
+                        </td>
+                        <td className="py-3 px-4">{v.purpose}</td>
+                        <td className="py-3 px-4">{v.entryTime ? new Date(v.entryTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                        <td className="py-3 px-4">
+                          {isInside ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 w-fit">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Inside
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-gray-100 text-gray-700">
+                              {v.status}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-right space-x-2">
+                          {v.status === 'pending' && (
+                            <button
+                              onClick={() => handleApproveVisitor(v._id)}
+                              disabled={actionLoading === v._id}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50"
+                            >
+                              Check-In
+                            </button>
+                          )}
+                          {isInside && (
+                            <button
+                              onClick={() => handleCheckoutVisitor(v._id)}
+                              disabled={actionLoading === v._id}
+                              className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 font-bold hover:bg-indigo-100 disabled:opacity-50"
+                            >
+                              Checkout
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setDeleteConfirmModal({
+                              open: true,
+                              type: 'visitor',
+                              id: v._id,
+                              description: `Visitor: ${v.visitorName}`,
+                            })}
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-rose-600"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB 5: COMPLAINTS & MAINTENANCE ─────────────────────────────────── */}
+      {activeTab === 'complaints' && (
+        <div className="bg-white rounded-2xl border border-gray-200/80 p-6 shadow-xs space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-4">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <Wrench className="w-5 h-5 text-indigo-600" />
+                Hostel Complaints & Maintenance Tickets
+              </h2>
+              <p className="text-xs text-gray-500">Monitor repairs, safety issues, food feedback, and sanitation requests.</p>
+            </div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <select
+                value={complaintTypeFilter}
+                onChange={(e) => setComplaintTypeFilter(e.target.value)}
+                className="py-1.5 px-3 text-xs bg-gray-50 border border-gray-200 rounded-xl"
+              >
+                <option value="all">All Categories</option>
+                <option value="maintenance">Maintenance</option>
+                <option value="cleaning">Cleaning</option>
+                <option value="safety">Safety</option>
+                <option value="food">Food</option>
+                <option value="other">Other</option>
+              </select>
+
+              <select
+                value={complaintStatusFilter}
+                onChange={(e) => setComplaintStatusFilter(e.target.value)}
+                className="py-1.5 px-3 text-xs bg-gray-50 border border-gray-200 rounded-xl"
+              >
+                <option value="all">All Statuses</option>
+                <option value="open">Open</option>
+                <option value="in-progress">In Progress</option>
+                <option value="resolved">Resolved</option>
+              </select>
+
+              <button
+                onClick={() => setMaintenanceModal({ ...maintenanceModal, open: true })}
+                className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Report Ticket
+              </button>
+            </div>
+          </div>
+
+          {complaintsList.length === 0 ? (
+            <div className="text-center py-12 bg-gray-50/50 rounded-2xl border border-dashed border-gray-200">
               <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-2 opacity-80" />
-              <p className="text-sm font-semibold text-gray-800">No Pending Visitors</p>
-              <p className="text-xs text-gray-500 mt-1">There are no pending gate entry passes to review.</p>
+              <p className="text-sm font-semibold text-gray-800">No Complaints Found</p>
+              <p className="text-xs text-gray-500 mt-1">No open issues matching selected filters.</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filteredVisitors.map((vis) => (
-                <div
-                  key={vis._id}
-                  className="p-4 rounded-xl border border-gray-100 bg-gradient-to-br from-white to-gray-50/50 shadow-xs hover:border-sky-200 transition-all flex flex-col justify-between space-y-3"
-                >
+              {complaintsList.map((c) => (
+                <div key={c._id} className="p-4 rounded-xl border border-gray-200/80 bg-gray-50/40 space-y-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-sky-100 text-sky-800 mb-1">
-                        Visitor Pass
-                      </span>
-                      <h3 className="font-bold text-gray-900 text-sm">{vis.visitorName}</h3>
-                      <p className="text-xs text-gray-500">
-                        Phone: <span className="font-medium text-gray-700">{vis.visitorPhone || 'N/A'}</span>
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-indigo-100 text-indigo-800">
+                          {c.complaintType}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                            c.priority === 'urgent' || c.priority === 'high'
+                              ? 'bg-rose-100 text-rose-800'
+                              : 'bg-gray-200 text-gray-700'
+                          }`}
+                        >
+                          {c.priority}
+                        </span>
+                      </div>
+                      <h3 className="font-bold text-gray-900 mt-1 text-sm">{c.title}</h3>
                     </div>
-                    <span className="text-[11px] text-gray-400 font-mono">
-                      {new Date(vis.createdAt || Date.now()).toLocaleTimeString('en-IN', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: true,
-                      })}
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                        c.status === 'resolved' || c.status === 'closed'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : c.status === 'in-progress'
+                          ? 'bg-sky-100 text-sky-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {c.status}
                     </span>
                   </div>
 
-                  <div className="bg-white p-2.5 rounded-lg border border-gray-100 text-xs text-gray-600">
-                    <p className="text-gray-800">
-                      Visiting Student: <span className="font-bold">{vis.visitingStudentId?.name || 'Student'}</span> (Room{' '}
-                      {vis.visitingStudentId?.roomId || 'N/A'})
-                    </p>
-                    <p className="text-gray-500 mt-0.5">Purpose: {vis.purpose || 'Personal Visit'}</p>
+                  <p className="text-xs text-gray-600">{c.description}</p>
+
+                  <div className="text-[11px] text-gray-500 flex items-center justify-between pt-2 border-t border-gray-200/60">
+                    <span>By: {c.raisedBy?.name || 'Staff'} (Room {c.roomId?.roomNumber || '—'})</span>
+                    <span>{new Date(c.createdAt).toLocaleDateString()}</span>
                   </div>
 
-                  {/* Actions: Approve, Reject, Delete */}
-                  <div className="flex items-center justify-between pt-2 border-t border-gray-100 gap-2">
+                  <div className="flex items-center justify-end gap-2 pt-1">
                     <button
-                      onClick={() =>
-                        setDeleteConfirmModal({
-                          open: true,
-                          type: 'visitor',
-                          id: vis._id,
-                          description: `Visitor pass for ${vis.visitorName}`,
-                        })
-                      }
-                      title="Delete Record"
-                      disabled={actionLoading === vis._id}
-                      className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                      onClick={() => setComplaintResolveModal({
+                        open: true,
+                        complaintId: c._id,
+                        title: c.title,
+                        status: c.status === 'open' ? 'in-progress' : 'resolved',
+                        resolutionNotes: c.resolutionNotes || '',
+                      })}
+                      className="px-3 py-1 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-semibold"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      Update Status
                     </button>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() =>
-                          setRejectModal({
-                            open: true,
-                            type: 'visitor',
-                            id: vis._id,
-                            studentOrVisitorName: vis.visitorName,
-                            reason: '',
-                          })
-                        }
-                        disabled={actionLoading === vis._id}
-                        className="px-3 py-1.5 text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors flex items-center gap-1"
-                      >
-                        <X className="w-3.5 h-3.5" /> Reject
-                      </button>
-                      <button
-                        onClick={() => handleApproveVisitor(vis._id)}
-                        disabled={actionLoading === vis._id}
-                        className="px-3 py-1.5 text-xs font-semibold text-white bg-sky-600 hover:bg-sky-700 rounded-lg shadow-xs transition-colors flex items-center gap-1 disabled:opacity-50"
-                      >
-                        <Check className="w-3.5 h-3.5" /> Approve Entry
-                      </button>
-                    </div>
                   </div>
                 </div>
               ))}
@@ -1084,578 +1806,121 @@ export default function WardenDashboard() {
         </div>
       )}
 
-      {/* ── CARD 4 DETAIL VIEW: ALERT NETWORKS & CURFEW HUB ────────────────── */}
-      {activeCard === 'curfew' && (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-6 animate-in fade-in duration-200">
-          {/* Top Tabs: Control vs History */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-4">
+      {/* ── TAB 6: CURFEW COMMAND HUB ───────────────────────────────────────── */}
+      {activeTab === 'curfew' && (
+        <div className="space-y-5">
+          <div className="bg-white rounded-2xl border border-gray-200/80 p-6 shadow-xs flex items-center justify-between gap-4">
             <div>
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                <ShieldAlert className="w-5 h-5 text-indigo-600" />
-                Curfew Automation & Alert Network Command
+                <Radio className="w-5 h-5 text-indigo-600" />
+                Curfew Automation & Sweeps
               </h2>
-              <p className="text-xs text-gray-500">
-                Customize curfew schedules, select alert targets & timing, manage live sweeps, and audit history.
-              </p>
+              <p className="text-xs text-gray-500">Configure timing, trigger sweeps, and inspect curfew breach logs.</p>
             </div>
-            <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-xl">
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => setCurfewHubTab('control')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  curfewHubTab === 'control' ? 'bg-white text-indigo-700 shadow-xs' : 'text-gray-600 hover:text-gray-900'
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
+                  curfewHubTab === 'control' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'
                 }`}
               >
-                <Sliders className="w-3.5 h-3.5" /> Curfew Control & Customization
+                Control & Config
               </button>
               <button
                 onClick={() => setCurfewHubTab('history')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  curfewHubTab === 'history' ? 'bg-white text-indigo-700 shadow-xs' : 'text-gray-600 hover:text-gray-900'
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
+                  curfewHubTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'
                 }`}
               >
-                <History className="w-3.5 h-3.5" /> Curfew History & Violation Audit
+                Curfew History Log
               </button>
             </div>
           </div>
 
           {curfewHubTab === 'control' ? (
-            <div className="space-y-6">
-              {/* ── LIVE CURFEW STATUS BANNER WITH DIRECT ACTION BUTTONS ─── */}
-              <div
-                className={`p-5 rounded-2xl border flex flex-col md:flex-row md:items-center justify-between gap-4 ${
-                  isCurfewActive
-                    ? 'bg-gradient-to-r from-rose-50 via-rose-100/40 to-amber-50 border-rose-200'
-                    : 'bg-gradient-to-r from-emerald-50 via-indigo-50/40 to-sky-50 border-emerald-200'
-                }`}
-              >
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`w-3 h-3 rounded-full ${isCurfewActive ? 'bg-rose-500 animate-ping' : 'bg-emerald-500'}`}
-                    />
-                    <h3 className="font-extrabold text-gray-900 text-base">
-                      {isCurfewActive ? 'Curfew Sweep is ACTIVE' : 'Curfew is STANDBY (Daytime / Normal Hours)'}
-                    </h3>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {/* Quick Sweep Trigger Card */}
+              <div className="bg-white rounded-2xl border border-gray-200/80 p-5 space-y-4">
+                <h3 className="font-bold text-gray-900 text-sm">Manual Curfew Sweep</h3>
+                <p className="text-xs text-gray-500">
+                  Trigger an on-demand sweep across all registered students in this hostel to verify physical presence and flag missing individuals.
+                </p>
+                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200/80 text-xs space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Current Status:</span>
+                    <span className={`font-bold uppercase ${isCurfewActive ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      {isCurfewActive ? 'Active Sweep' : 'Standby'}
+                    </span>
                   </div>
-                  <p className="text-xs text-gray-600 mt-1">
-                    Scheduled Hours: <span className="font-bold text-gray-900">{curfewConfig.curfewTime}</span> to{' '}
-                    <span className="font-bold text-gray-900">{curfewConfig.curfewEndTime}</span> • Grace Period:{' '}
-                    <span className="font-bold text-gray-900">{curfewConfig.gracePeriodMinutes} mins</span>
-                  </p>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Configured Hours:</span>
+                    <span className="font-semibold text-gray-800">{curfewConfig.curfewTime} - {curfewConfig.curfewEndTime}</span>
+                  </div>
                 </div>
 
-                {/* Instant Actions: Start Sweep Now vs End Curfew Now */}
-                <div className="flex items-center gap-3">
-                  {!isCurfewActive ? (
+                <div className="pt-2 flex gap-3">
+                  {isCurfewActive ? (
                     <button
-                      onClick={handleStartCurfewNow}
-                      disabled={startingCurfew}
-                      className="px-4 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-100 flex items-center gap-2 disabled:opacity-50 transition-all cursor-pointer"
+                      onClick={handleEndCurfew}
+                      disabled={endingCurfew}
+                      className="w-full py-2.5 rounded-xl bg-rose-600 text-white font-bold text-xs hover:bg-rose-700 disabled:opacity-50"
                     >
-                      <Play className={`w-3.5 h-3.5 ${startingCurfew ? 'animate-spin' : ''}`} />
-                      {startingCurfew ? 'Starting Curfew...' : (curfewStatus?.manualCurfewEndedAt ? 'Start Curfew Again' : 'Start Curfew Sweep Now')}
+                      {endingCurfew ? 'Ending Sweep...' : 'Stop Curfew'}
                     </button>
                   ) : (
                     <button
-                      onClick={handleEndCurfewNow}
-                      disabled={endingCurfew}
-                      className="px-4 py-2.5 bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-700 hover:to-rose-800 text-white rounded-xl text-xs font-bold shadow-md shadow-rose-100 flex items-center gap-2 disabled:opacity-50 transition-all cursor-pointer"
+                      onClick={handleStartCurfewSweep}
+                      disabled={startingCurfew}
+                      className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-700 disabled:opacity-50"
                     >
-                      <StopCircle className={`w-3.5 h-3.5 ${endingCurfew ? 'animate-spin' : ''}`} />
-                      {endingCurfew ? 'Ending Curfew...' : 'End Curfew Session Now'}
+                      {startingCurfew ? 'Initiating Sweep...' : 'Initiate Manual Sweep'}
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* ── SCHEDULE & ALERT CUSTOMIZATION FORM ─── */}
-              <div className="bg-gray-50/70 p-5 rounded-2xl border border-gray-200/80 space-y-5">
-                <div className="border-b border-gray-200/80 pb-3 flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                    <Sliders className="w-4 h-4 text-indigo-600" />
-                    Curfew Schedule & Trigger Customization
-                  </h3>
-                  <span className="text-[11px] text-gray-500 font-medium">All settings customized by Warden</span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                  {/* Start Time */}
-                  <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-1.5">
-                      1. Curfew Start Time (When curfew begins)
-                    </label>
-                    <input
-                      type="time"
-                      value={curfewConfig.curfewTime}
-                      onChange={(e) => setCurfewConfig({ ...curfewConfig, curfewTime: e.target.value })}
-                      className="w-full px-3 py-2 text-sm font-bold text-gray-900 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                    />
-                    {/* Quick Presets */}
-                    <div className="flex items-center gap-1.5 mt-2">
-                      {['21:00', '21:30', '22:00', '22:30'].map((preset) => (
-                        <button
-                          key={preset}
-                          type="button"
-                          onClick={() => setCurfewConfig({ ...curfewConfig, curfewTime: preset })}
-                          className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
-                            curfewConfig.curfewTime === preset
-                              ? 'bg-indigo-600 text-white border-indigo-600'
-                              : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-                          }`}
-                        >
-                          {preset}
-                        </button>
-                      ))}
-                    </div>
+              {/* Timing Overview Card */}
+              <div className="bg-white rounded-2xl border border-gray-200/80 p-5 space-y-4">
+                <h3 className="font-bold text-gray-900 text-sm">Curfew Schedule Settings</h3>
+                <p className="text-xs text-gray-500">Timing and notification configuration active for this hostel campus.</p>
+                <div className="space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50">
+                    <span className="text-gray-600">Weekday Curfew Starts:</span>
+                    <span className="font-bold text-gray-900 font-mono">{curfewConfig.curfewTime}</span>
                   </div>
-
-                  {/* End Time */}
-                  <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-1.5">
-                      2. Curfew End Time (When curfew concludes)
-                    </label>
-                    <input
-                      type="time"
-                      value={curfewConfig.curfewEndTime}
-                      onChange={(e) => setCurfewConfig({ ...curfewConfig, curfewEndTime: e.target.value })}
-                      className="w-full px-3 py-2 text-sm font-bold text-gray-900 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                    />
-                    {/* Quick Presets */}
-                    <div className="flex items-center gap-1.5 mt-2">
-                      {['05:30', '06:00', '06:30', '07:00'].map((preset) => (
-                        <button
-                          key={preset}
-                          type="button"
-                          onClick={() => setCurfewConfig({ ...curfewConfig, curfewEndTime: preset })}
-                          className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
-                            curfewConfig.curfewEndTime === preset
-                              ? 'bg-indigo-600 text-white border-indigo-600'
-                              : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-                          }`}
-                        >
-                          {preset}
-                        </button>
-                      ))}
-                    </div>
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50">
+                    <span className="text-gray-600">Weekend Curfew Starts:</span>
+                    <span className="font-bold text-gray-900 font-mono">{curfewConfig.weekendCurfewTime || '22:00'}</span>
                   </div>
-
-                  {/* Grace Period */}
-                  <div>
-                    <label className="block text-xs font-bold text-gray-700 mb-1.5">
-                      3. Grace Period Duration
-                    </label>
-                    <select
-                      value={curfewConfig.gracePeriodMinutes}
-                      onChange={(e) => setCurfewConfig({ ...curfewConfig, gracePeriodMinutes: Number(e.target.value) })}
-                      className="w-full px-3 py-2 text-sm font-bold text-gray-900 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                    >
-                      <option value={10}>10 Minutes Grace</option>
-                      <option value={15}>15 Minutes (Standard)</option>
-                      <option value={20}>20 Minutes Grace</option>
-                      <option value={30}>30 Minutes Extended</option>
-                    </select>
-                    <p className="text-[11px] text-gray-400 mt-2">Time allowed before reporting confirmed breach.</p>
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50">
+                    <span className="text-gray-600">Curfew Ends (Morning):</span>
+                    <span className="font-bold text-gray-900 font-mono">{curfewConfig.curfewEndTime}</span>
                   </div>
-                </div>
-
-                {/* Who To Send Alerts To */}
-                <div className="pt-3 border-t border-gray-200">
-                  <label className="block text-xs font-bold text-gray-800 mb-2">
-                    Who to send alerts to (Recipient Networks):
-                  </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-                    {[
-                      { key: 'students', label: 'Students (Push + App)' },
-                      { key: 'warden', label: 'Wardens (Alert Hub)' },
-                      { key: 'owner', label: 'Hostel Owner' },
-                      { key: 'parents', label: 'Parents (Emergency)' },
-                      { key: 'guards', label: 'Gate Security' },
-                    ].map(({ key, label }) => (
-                      <label
-                        key={key}
-                        className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs font-semibold cursor-pointer transition-all ${
-                          (curfewConfig.recipients as any)[key]
-                            ? 'bg-indigo-50 border-indigo-300 text-indigo-900'
-                            : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={(curfewConfig.recipients as any)[key]}
-                          onChange={(e) =>
-                            setCurfewConfig({
-                              ...curfewConfig,
-                              recipients: {
-                                ...curfewConfig.recipients,
-                                [key]: e.target.checked,
-                              },
-                            })
-                          }
-                          className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
-                        />
-                        <span>{label}</span>
-                      </label>
-                    ))}
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50">
+                    <span className="text-gray-600">Grace Buffer Duration:</span>
+                    <span className="font-bold text-gray-900">{curfewConfig.gracePeriodMinutes} mins</span>
                   </div>
-                </div>
-
-                {/* When To Send Alerts */}
-                <div className="pt-3 border-t border-gray-200">
-                  <label className="block text-xs font-bold text-gray-800 mb-2">
-                    When to send alerts (Event Automation Timings):
-                  </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    <label className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-gray-200 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={curfewConfig.timing.preCurfewReminder}
-                        onChange={(e) =>
-                          setCurfewConfig({
-                            ...curfewConfig,
-                            timing: { ...curfewConfig.timing, preCurfewReminder: e.target.checked },
-                          })
-                        }
-                        className="mt-0.5 w-4 h-4 text-indigo-600 rounded"
-                      />
-                      <div>
-                        <span className="font-bold text-gray-800">Pre-Curfew Reminder</span>
-                        <p className="text-[11px] text-gray-500">15 mins before curfew to report inside.</p>
-                      </div>
-                    </label>
-
-                    <label className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-gray-200 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={curfewConfig.timing.onCurfewStart}
-                        onChange={(e) =>
-                          setCurfewConfig({
-                            ...curfewConfig,
-                            timing: { ...curfewConfig.timing, onCurfewStart: e.target.checked },
-                          })
-                        }
-                        className="mt-0.5 w-4 h-4 text-indigo-600 rounded"
-                      />
-                      <div>
-                        <span className="font-bold text-gray-800">At Curfew Start (0 min)</span>
-                        <p className="text-[11px] text-gray-500">Silent sweep & grace period warning.</p>
-                      </div>
-                    </label>
-
-                    <label className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-gray-200 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={curfewConfig.timing.onTenMinuteWarning}
-                        onChange={(e) =>
-                          setCurfewConfig({
-                            ...curfewConfig,
-                            timing: { ...curfewConfig.timing, onTenMinuteWarning: e.target.checked },
-                          })
-                        }
-                        className="mt-0.5 w-4 h-4 text-indigo-600 rounded"
-                      />
-                      <div>
-                        <span className="font-bold text-gray-800">10-Minute Recheck</span>
-                        <p className="text-[11px] text-gray-500">Final 5-minute grace warning to student.</p>
-                      </div>
-                    </label>
-
-                    <label className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-gray-200 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={curfewConfig.timing.onGraceExpiry}
-                        onChange={(e) =>
-                          setCurfewConfig({
-                            ...curfewConfig,
-                            timing: { ...curfewConfig.timing, onGraceExpiry: e.target.checked },
-                          })
-                        }
-                        className="mt-0.5 w-4 h-4 text-indigo-600 rounded"
-                      />
-                      <div>
-                        <span className="font-bold text-gray-800">Grace Expiration (15 min)</span>
-                        <p className="text-[11px] text-gray-500">Confirmed violation to Warden & Owner.</p>
-                      </div>
-                    </label>
-
-                    <label className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-gray-200 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={curfewConfig.timing.onParentEscalation}
-                        onChange={(e) =>
-                          setCurfewConfig({
-                            ...curfewConfig,
-                            timing: { ...curfewConfig.timing, onParentEscalation: e.target.checked },
-                          })
-                        }
-                        className="mt-0.5 w-4 h-4 text-indigo-600 rounded"
-                      />
-                      <div>
-                        <span className="font-bold text-gray-800">Parent Escalation (30 min)</span>
-                        <p className="text-[11px] text-gray-500">Emergency email dispatched to parent.</p>
-                      </div>
-                    </label>
-                  </div>
-                </div>
-
-                {/* Save Button */}
-                <div className="pt-2 flex justify-end">
-                  <button
-                    onClick={handleSaveCurfewConfig}
-                    disabled={savingConfig}
-                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors flex items-center gap-2 disabled:opacity-50"
-                  >
-                    <CheckCircle2 className={`w-4 h-4 ${savingConfig ? 'animate-spin' : ''}`} />
-                    {savingConfig ? 'Saving Settings...' : 'Save Curfew Configuration'}
-                  </button>
-                </div>
-              </div>
-
-              {/* ── QUICK EMERGENCY BROADCAST ─── */}
-              <div className="bg-white rounded-xl border border-rose-100 p-5 space-y-4">
-                <div className="flex items-center gap-2 text-rose-700 font-bold text-sm">
-                  <Megaphone className="w-4 h-4" />
-                  Quick Emergency Broadcast to Network
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <input
-                    type="text"
-                    placeholder="Broadcast title (e.g. Unscheduled Security Curfew)"
-                    value={emergencyForm.title}
-                    onChange={(e) => setEmergencyForm({ ...emergencyForm, title: e.target.value })}
-                    className="px-3 py-2 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Brief message details..."
-                    value={emergencyForm.message}
-                    onChange={(e) => setEmergencyForm({ ...emergencyForm, message: e.target.value })}
-                    className="px-3 py-2 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
-                  />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3 text-xs font-medium text-gray-600">
-                    <span>Target:</span>
-                    <label className="flex items-center gap-1">
-                      <input
-                        type="checkbox"
-                        checked={emergencyForm.targetRoles.student}
-                        onChange={(e) =>
-                          setEmergencyForm({
-                            ...emergencyForm,
-                            targetRoles: { ...emergencyForm.targetRoles, student: e.target.checked },
-                          })
-                        }
-                      />
-                      Students
-                    </label>
-                    <label className="flex items-center gap-1">
-                      <input
-                        type="checkbox"
-                        checked={emergencyForm.targetRoles.owner}
-                        onChange={(e) =>
-                          setEmergencyForm({
-                            ...emergencyForm,
-                            targetRoles: { ...emergencyForm.targetRoles, owner: e.target.checked },
-                          })
-                        }
-                      />
-                      Owner
-                    </label>
-                  </div>
-                  <button
-                    onClick={handleBroadcastEmergency}
-                    disabled={broadcasting}
-                    className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    {broadcasting ? 'Sending...' : 'Broadcast Alert'}
-                  </button>
                 </div>
               </div>
             </div>
           ) : (
-            /* ── CURFEW HISTORY & VIOLATION AUDIT LOG ─── */
-            <div className="space-y-5">
-              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setHistorySubTab('sessions')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                      historySubTab === 'sessions'
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
-                  >
-                    Past Curfew Sessions ({curfewSessions.length})
-                  </button>
-                  <button
-                    onClick={() => setHistorySubTab('violations')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                      historySubTab === 'violations'
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
-                  >
-                    Student Violation Audit Records ({curfewViolationHistory.length})
-                  </button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="date"
-                    value={historyDateFilter}
-                    onChange={(e) => setHistoryDateFilter(e.target.value)}
-                    className="px-2.5 py-1 text-xs bg-gray-50 border border-gray-200 rounded-lg"
-                  />
-                  <button
-                    onClick={loadCurfewHistory}
-                    className="p-1.5 text-gray-500 hover:text-indigo-600 rounded-lg hover:bg-gray-100"
-                  >
-                    <RefreshCw className={`w-4 h-4 ${loadingHistory ? 'animate-spin' : ''}`} />
-                  </button>
-                </div>
-              </div>
-
-              {historySubTab === 'sessions' ? (
-                /* Curfew Sessions History Table */
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-gray-200 text-gray-400 uppercase font-bold">
-                        <th className="py-2.5 px-3">Session Date</th>
-                        <th className="py-2.5 px-3">Type</th>
-                        <th className="py-2.5 px-3">Start Time</th>
-                        <th className="py-2.5 px-3">End Time</th>
-                        <th className="py-2.5 px-3">Present</th>
-                        <th className="py-2.5 px-3">Violations</th>
-                        <th className="py-2.5 px-3">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
-                      {curfewSessions.length === 0 ? (
-                        <tr>
-                          <td colSpan={7} className="py-8 text-center text-gray-400">
-                            No past curfew session history found for this hostel.
-                          </td>
-                        </tr>
-                      ) : (
-                        curfewSessions.map((sess) => (
-                          <tr key={sess._id} className="hover:bg-gray-50/50">
-                            <td className="py-3 px-3 font-semibold text-gray-900">
-                              {new Date(sess.sessionDate || sess.createdAt).toLocaleDateString('en-IN')}
-                            </td>
-                            <td className="py-3 px-3">
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                  sess.sessionType === 'manual'
-                                    ? 'bg-amber-100 text-amber-800'
-                                    : 'bg-indigo-100 text-indigo-800'
-                                }`}
-                              >
-                                {sess.sessionType}
-                              </span>
-                            </td>
-                            <td className="py-3 px-3">
-                              {sess.startTime
-                                ? new Date(sess.startTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
-                                : sess.curfewStartTime || '--'}
-                            </td>
-                            <td className="py-3 px-3">
-                              {sess.endTime
-                                ? new Date(sess.endTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
-                                : sess.curfewEndTime || '--'}
-                            </td>
-                            <td className="py-3 px-3 text-emerald-600 font-bold">{sess.summary?.presentCount || 0}</td>
-                            <td className="py-3 px-3 text-rose-600 font-bold">{sess.summary?.violationsCount || 0}</td>
-                            <td className="py-3 px-3">
-                              <span
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                  sess.status === 'active'
-                                    ? 'bg-rose-100 text-rose-700'
-                                    : 'bg-emerald-100 text-emerald-700'
-                                }`}
-                              >
-                                {sess.status === 'ended_by_warden' ? 'Ended by Warden' : sess.status}
-                              </span>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+            <div className="bg-white rounded-2xl border border-gray-200/80 p-6 shadow-xs space-y-4">
+              <h3 className="font-bold text-gray-900 text-sm">Curfew Audit History</h3>
+              {curfewSessions.length === 0 ? (
+                <div className="text-center py-8 text-xs text-gray-500">No curfew sessions logged yet.</div>
               ) : (
-                /* Student Violation Audit Log Table */
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-gray-200 text-gray-400 uppercase font-bold">
-                        <th className="py-2.5 px-3">Student</th>
-                        <th className="py-2.5 px-3">Room</th>
-                        <th className="py-2.5 px-3">Violation Date</th>
-                        <th className="py-2.5 px-3">Curfew Time</th>
-                        <th className="py-2.5 px-3">Status</th>
-                        <th className="py-2.5 px-3">Resolution</th>
-                        <th className="py-2.5 px-3 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 font-medium text-gray-700">
-                      {curfewViolationHistory.length === 0 ? (
-                        <tr>
-                          <td colSpan={7} className="py-8 text-center text-gray-400">
-                            No student violation audit records found.
-                          </td>
-                        </tr>
-                      ) : (
-                        curfewViolationHistory.map((rec) => (
-                          <tr key={rec._id} className="hover:bg-gray-50/50">
-                            <td className="py-3 px-3 font-semibold text-gray-900">{rec.studentId?.name || 'Student'}</td>
-                            <td className="py-3 px-3">{rec.studentId?.roomId || rec.roomNumber || 'N/A'}</td>
-                            <td className="py-3 px-3">
-                              {new Date(rec.violationDate || rec.createdAt).toLocaleString('en-IN', {
-                                month: 'short',
-                                day: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </td>
-                            <td className="py-3 px-3 font-mono">{rec.curfewTime}</td>
-                            <td className="py-3 px-3">
-                              <span
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                  rec.status === 'resolved'
-                                    ? 'bg-emerald-100 text-emerald-700'
-                                    : rec.status === 'pending_recheck'
-                                    ? 'bg-amber-100 text-amber-700'
-                                    : 'bg-rose-100 text-rose-700'
-                                }`}
-                              >
-                                {rec.status}
-                              </span>
-                            </td>
-                            <td className="py-3 px-3 text-gray-500 max-w-xs truncate">
-                              {rec.resolutionNote || (rec.studentReturnedAt ? 'Student Returned' : 'Pending')}
-                            </td>
-                            <td className="py-3 px-3 text-right">
-                              <button
-                                onClick={() =>
-                                  setDeleteConfirmModal({
-                                    open: true,
-                                    type: 'curfew',
-                                    id: rec._id,
-                                    description: `Curfew record for ${rec.studentId?.name || 'student'}`,
-                                  })
-                                }
-                                className="p-1 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded"
-                                title="Delete from history"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                <div className="space-y-2">
+                  {curfewSessions.slice(0, 10).map((s: any) => (
+                    <div key={s._id} className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-xs flex justify-between items-center">
+                      <div>
+                        <p className="font-bold text-gray-900">{s.sessionDate ? new Date(s.sessionDate).toLocaleDateString() : 'Session'}</p>
+                        <p className="text-gray-500 text-[11px]">Type: {s.sessionType || 'Automated'}</p>
+                      </div>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-200 text-gray-700 uppercase">
+                        {s.status}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -1663,83 +1928,602 @@ export default function WardenDashboard() {
         </div>
       )}
 
-      {/* ── REJECTION MODAL ────────────────────────────────────────────────── */}
-      {rejectModal.open && (
+      {/* ── MODAL 1: MARK ATTENDANCE (Quick Action) ─────────────────────────── */}
+      {markAttendanceModal.open && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 space-y-4 animate-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in fade-in">
             <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-              <h3 className="font-bold text-gray-900 text-base">
-                Reject {rejectModal.type === 'permission' ? 'Permission Request' : 'Visitor Pass'}
+              <h3 className="font-bold text-gray-900 flex items-center gap-2 text-base">
+                <UserCheck className="w-5 h-5 text-indigo-600" />
+                Mark Student Attendance
               </h3>
               <button
-                onClick={() =>
-                  setRejectModal({ open: false, type: 'permission', id: '', studentOrVisitorName: '', reason: '' })
-                }
-                className="text-gray-400 hover:text-gray-600 p-1"
+                onClick={() => setMarkAttendanceModal({ ...markAttendanceModal, open: false })}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600"
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-xs text-gray-600">
-              Please provide the official reason for rejecting{' '}
-              <span className="font-semibold text-gray-900">{rejectModal.studentOrVisitorName}</span>:
+
+            <form onSubmit={handleMarkAttendanceSubmit} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Select Student *</label>
+                <select
+                  value={markAttendanceModal.studentId}
+                  onChange={(e) => setMarkAttendanceModal({ ...markAttendanceModal, studentId: e.target.value })}
+                  required
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                >
+                  <option value="">-- Choose student --</option>
+                  {hostelStudents.map((s) => (
+                    <option key={s._id} value={s._id}>
+                      {s.name} (Room {s.roomId?.roomNumber || '—'}) {s.studentId ? `[${s.studentId}]` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Attendance Status *</label>
+                <select
+                  value={markAttendanceModal.status}
+                  onChange={(e) => setMarkAttendanceModal({ ...markAttendanceModal, status: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl focus:outline-none"
+                >
+                  <option value="inside">Present (Inside Hostel)</option>
+                  <option value="outside">Outside Hostel</option>
+                  <option value="on-leave">On Approved Leave</option>
+                  <option value="pending">Pending Verification</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Remarks / Notes</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Manual gate entry verified by warden"
+                  value={markAttendanceModal.notes}
+                  onChange={(e) => setMarkAttendanceModal({ ...markAttendanceModal, notes: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl focus:outline-none"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setMarkAttendanceModal({ ...markAttendanceModal, open: false })}
+                  className="flex-1 py-2 rounded-xl bg-gray-100 text-gray-700 font-bold hover:bg-gray-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'markAttendance'}
+                  className="flex-1 py-2 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {actionLoading === 'markAttendance' ? 'Saving...' : 'Save Attendance'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 2: ADD VISITOR (Quick Action) ─────────────────────────────── */}
+      {addVisitorModal.open && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2 text-base">
+                <Plus className="w-5 h-5 text-sky-600" />
+                Register Visitor Pass
+              </h3>
+              <button
+                onClick={() => setAddVisitorModal({ ...addVisitorModal, open: false })}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddVisitorSubmit} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Visitor Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Rajesh Kumar"
+                  value={addVisitorModal.visitorName}
+                  onChange={(e) => setAddVisitorModal({ ...addVisitorModal, visitorName: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Visitor Phone Number *</label>
+                <input
+                  type="tel"
+                  required
+                  placeholder="e.g. 9876543210"
+                  value={addVisitorModal.visitorPhone}
+                  onChange={(e) => setAddVisitorModal({ ...addVisitorModal, visitorPhone: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Visiting Student *</label>
+                <select
+                  value={addVisitorModal.visitingStudentId}
+                  onChange={(e) => setAddVisitorModal({ ...addVisitorModal, visitingStudentId: e.target.value })}
+                  required
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                >
+                  <option value="">-- Choose student --</option>
+                  {hostelStudents.map((s) => (
+                    <option key={s._id} value={s._id}>
+                      {s.name} (Room {s.roomId?.roomNumber || '—'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Purpose of Visit *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Parent meeting, book delivery"
+                  value={addVisitorModal.purpose}
+                  onChange={(e) => setAddVisitorModal({ ...addVisitorModal, purpose: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="autoApprove"
+                  checked={addVisitorModal.autoApprove}
+                  onChange={(e) => setAddVisitorModal({ ...addVisitorModal, autoApprove: e.target.checked })}
+                  className="rounded text-sky-600"
+                />
+                <label htmlFor="autoApprove" className="text-gray-700 font-medium">
+                  Approve and check-in immediately at gate
+                </label>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setAddVisitorModal({ ...addVisitorModal, open: false })}
+                  className="flex-1 py-2 rounded-xl bg-gray-100 text-gray-700 font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'addVisitor'}
+                  className="flex-1 py-2 rounded-xl bg-sky-600 text-white font-bold hover:bg-sky-700 disabled:opacity-50"
+                >
+                  {actionLoading === 'addVisitor' ? 'Adding...' : 'Register Visitor'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 3: ANNOUNCEMENT (Quick Action) ────────────────────────────── */}
+      {announcementModal.open && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2 text-base">
+                <Megaphone className="w-5 h-5 text-purple-600" />
+                Broadcast Announcement
+              </h3>
+              <button
+                onClick={() => setAnnouncementModal({ ...announcementModal, open: false })}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAnnouncementSubmit} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Announcement Title *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Water Supply Maintenance Notice"
+                  value={announcementModal.title}
+                  onChange={(e) => setAnnouncementModal({ ...announcementModal, title: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Message Content *</label>
+                <textarea
+                  required
+                  rows={3}
+                  placeholder="Write message details for hostel occupants..."
+                  value={announcementModal.message}
+                  onChange={(e) => setAnnouncementModal({ ...announcementModal, message: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Audience</label>
+                  <select
+                    value={announcementModal.targetAudience}
+                    onChange={(e) => setAnnouncementModal({ ...announcementModal, targetAudience: e.target.value })}
+                    className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                  >
+                    <option value="all">Everyone in Hostel</option>
+                    <option value="students">Students Only</option>
+                    <option value="staff">Hostel Staff Only</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Priority</label>
+                  <select
+                    value={announcementModal.priority}
+                    onChange={(e) => setAnnouncementModal({ ...announcementModal, priority: e.target.value })}
+                    className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setAnnouncementModal({ ...announcementModal, open: false })}
+                  className="flex-1 py-2 rounded-xl bg-gray-100 text-gray-700 font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'announcement'}
+                  className="flex-1 py-2 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 disabled:opacity-50"
+                >
+                  {actionLoading === 'announcement' ? 'Sending...' : 'Broadcast'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 4: REPORT MAINTENANCE (Quick Action) ──────────────────────── */}
+      {maintenanceModal.open && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2 text-base">
+                <Wrench className="w-5 h-5 text-emerald-600" />
+                Submit Maintenance Ticket
+              </h3>
+              <button
+                onClick={() => setMaintenanceModal({ ...maintenanceModal, open: false })}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleMaintenanceSubmit} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Issue Title *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Geyser leakage in 2nd floor bathroom"
+                  value={maintenanceModal.title}
+                  onChange={(e) => setMaintenanceModal({ ...maintenanceModal, title: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Description *</label>
+                <textarea
+                  required
+                  rows={3}
+                  placeholder="Describe repair requirements..."
+                  value={maintenanceModal.description}
+                  onChange={(e) => setMaintenanceModal({ ...maintenanceModal, description: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Room (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 204 or Block A"
+                    value={maintenanceModal.roomId}
+                    onChange={(e) => setMaintenanceModal({ ...maintenanceModal, roomId: e.target.value })}
+                    className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Priority</label>
+                  <select
+                    value={maintenanceModal.priority}
+                    onChange={(e) => setMaintenanceModal({ ...maintenanceModal, priority: e.target.value })}
+                    className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="urgent">Urgent / Emergency</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setMaintenanceModal({ ...maintenanceModal, open: false })}
+                  className="flex-1 py-2 rounded-xl bg-gray-100 text-gray-700 font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'maintenance'}
+                  className="flex-1 py-2 rounded-xl bg-emerald-600 text-white font-bold hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {actionLoading === 'maintenance' ? 'Submitting...' : 'Submit Request'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 5: RECORD DISCIPLINARY INCIDENT (Quick Action) ─────────────── */}
+      {incidentModal.open && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <h3 className="font-bold text-gray-900 flex items-center gap-2 text-base">
+                <AlertTriangle className="w-5 h-5 text-rose-600" />
+                Record Disciplinary Incident
+              </h3>
+              <button
+                onClick={() => setIncidentModal({ ...incidentModal, open: false })}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleIncidentSubmit} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Student Involved *</label>
+                <select
+                  value={incidentModal.studentId}
+                  onChange={(e) => setIncidentModal({ ...incidentModal, studentId: e.target.value })}
+                  required
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                >
+                  <option value="">-- Select student --</option>
+                  {hostelStudents.map((s) => (
+                    <option key={s._id} value={s._id}>
+                      {s.name} (Room {s.roomId?.roomNumber || '—'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Violation Type</label>
+                  <select
+                    value={incidentModal.violationType}
+                    onChange={(e) => setIncidentModal({ ...incidentModal, violationType: e.target.value })}
+                    className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                  >
+                    <option value="late-entry">Late Entry</option>
+                    <option value="curfew">Curfew Breach</option>
+                    <option value="unauthorized-visitor">Unauthorized Visitor</option>
+                    <option value="noise">Noise Disruption</option>
+                    <option value="damage">Hostel Property Damage</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Warning Level</label>
+                  <select
+                    value={incidentModal.warningLevel}
+                    onChange={(e) => setIncidentModal({ ...incidentModal, warningLevel: e.target.value })}
+                    className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                  >
+                    <option value="warning">First Warning</option>
+                    <option value="first">Formal First Strike</option>
+                    <option value="second">Second Strike</option>
+                    <option value="final">Final Warning</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Incident Description *</label>
+                <textarea
+                  required
+                  rows={3}
+                  placeholder="Details of the event, location, witnesses..."
+                  value={incidentModal.description}
+                  onChange={(e) => setIncidentModal({ ...incidentModal, description: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Fine Amount (₹ optional)</label>
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  value={incidentModal.fineAmount}
+                  onChange={(e) => setIncidentModal({ ...incidentModal, fineAmount: Number(e.target.value) })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIncidentModal({ ...incidentModal, open: false })}
+                  className="flex-1 py-2 rounded-xl bg-gray-100 text-gray-700 font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'incident'}
+                  className="flex-1 py-2 rounded-xl bg-rose-600 text-white font-bold hover:bg-rose-700 disabled:opacity-50"
+                >
+                  {actionLoading === 'incident' ? 'Recording...' : 'Record Violation'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 6: UPDATE COMPLAINT STATUS ─────────────────────────────────── */}
+      {complaintResolveModal.open && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <h3 className="font-bold text-gray-900 text-base">Update Complaint Status</h3>
+              <button
+                onClick={() => setComplaintResolveModal({ ...complaintResolveModal, open: false })}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleComplaintResolveSubmit} className="space-y-3.5 text-xs">
+              <p className="font-semibold text-gray-800">{complaintResolveModal.title}</p>
+
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Status *</label>
+                <select
+                  value={complaintResolveModal.status}
+                  onChange={(e) => setComplaintResolveModal({ ...complaintResolveModal, status: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                >
+                  <option value="open">Open</option>
+                  <option value="in-progress">In Progress</option>
+                  <option value="resolved">Resolved</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-gray-700 mb-1">Resolution Remarks</label>
+                <textarea
+                  rows={3}
+                  placeholder="Notes on how the issue was addressed..."
+                  value={complaintResolveModal.resolutionNotes}
+                  onChange={(e) => setComplaintResolveModal({ ...complaintResolveModal, resolutionNotes: e.target.value })}
+                  className="w-full py-2 px-3 bg-gray-50 border border-gray-300 rounded-xl"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setComplaintResolveModal({ ...complaintResolveModal, open: false })}
+                  className="flex-1 py-2 rounded-xl bg-gray-100 text-gray-700 font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'resolveComplaint'}
+                  className="flex-1 py-2 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {actionLoading === 'resolveComplaint' ? 'Saving...' : 'Save Status'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 7: REJECT PERMISSION / VISITOR ─────────────────────────────── */}
+      {rejectModal.open && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <h3 className="font-bold text-gray-900 text-base">
+              Reject Request for {rejectModal.studentOrVisitorName}
+            </h3>
+            <p className="text-xs text-gray-500">
+              Please specify why this request is being denied. The applicant will be notified immediately.
             </p>
             <textarea
               rows={3}
+              placeholder="Reason for rejection..."
               value={rejectModal.reason}
               onChange={(e) => setRejectModal({ ...rejectModal, reason: e.target.value })}
-              placeholder="e.g., Prior disciplinary action, incomplete parent authorization, curfew restriction..."
-              className="w-full px-3 py-2 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+              className="w-full text-xs p-3 bg-gray-50 border border-gray-300 rounded-xl"
             />
-            <div className="flex items-center justify-end gap-2 pt-2">
+            <div className="flex gap-2">
               <button
-                onClick={() =>
-                  setRejectModal({ open: false, type: 'permission', id: '', studentOrVisitorName: '', reason: '' })
-                }
-                className="px-4 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
+                onClick={() => setRejectModal({ open: false, type: 'permission', id: '', studentOrVisitorName: '', reason: '' })}
+                className="flex-1 py-2 rounded-xl bg-gray-100 text-gray-700 font-bold text-xs"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmReject}
                 disabled={actionLoading === rejectModal.id}
-                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors disabled:opacity-50"
+                className="flex-1 py-2 rounded-xl bg-rose-600 text-white font-bold text-xs hover:bg-rose-700 disabled:opacity-50"
               >
-                Confirm Rejection
+                Confirm Reject
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── ESCALATION MODAL ──────────────────────────────────────────────── */}
+      {/* ── MODAL 8: ESCALATE VIOLATION ──────────────────────────────────────── */}
       {escalateModal.open && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-100 space-y-4 animate-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-              <h3 className="font-bold text-gray-900 text-base">Escalate Violation to Owner</h3>
-              <button
-                onClick={() => setEscalateModal({ open: false, id: '', studentName: '', reason: '' })}
-                className="text-gray-400 hover:text-gray-600 p-1"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <p className="text-xs text-gray-600">
-              Escalating violation for <span className="font-semibold text-gray-900">{escalateModal.studentName}</span>.
-              This dispatches an immediate high-priority alert and notification to the hostel owner.
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <h3 className="font-bold text-gray-900 text-base">Escalate to Management</h3>
+            <p className="text-xs text-gray-500">
+              Escalate infraction of <span className="font-semibold text-gray-800">{escalateModal.studentName}</span> directly to hostel owners.
             </p>
-            <div className="flex items-center justify-end gap-2 pt-2">
+            <div className="flex gap-2">
               <button
                 onClick={() => setEscalateModal({ open: false, id: '', studentName: '', reason: '' })}
-                className="px-4 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
+                className="flex-1 py-2 rounded-xl bg-gray-100 text-gray-700 font-bold text-xs"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmEscalate}
                 disabled={actionLoading === escalateModal.id}
-                className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-colors disabled:opacity-50"
+                className="flex-1 py-2 rounded-xl bg-amber-600 text-white font-bold text-xs hover:bg-amber-700 disabled:opacity-50"
               >
                 Confirm Escalation
               </button>
@@ -1748,34 +2532,27 @@ export default function WardenDashboard() {
         </div>
       )}
 
-      {/* ── DELETE CONFIRMATION MODAL ──────────────────────────────────────── */}
+      {/* ── MODAL 9: DELETE CONFIRMATION ─────────────────────────────────────── */}
       {deleteConfirmModal.open && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-gray-100 space-y-4 animate-in zoom-in-95 duration-150">
-            <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
-              <AlertOctagon className="w-5 h-5" />
-            </div>
-            <div className="text-center">
-              <h3 className="font-bold text-gray-900 text-base">Confirm Delete Record</h3>
-              <p className="text-xs text-gray-500 mt-1">
-                Are you sure you want to permanently delete:
-                <br />
-                <span className="font-semibold text-gray-800">{deleteConfirmModal.description}</span>?
-              </p>
-            </div>
-            <div className="flex items-center justify-center gap-2 pt-2">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <h3 className="font-bold text-gray-900 text-base">Confirm Deletion</h3>
+            <p className="text-xs text-gray-500">
+              Are you sure you want to permanently delete this record? This action cannot be undone.
+            </p>
+            <div className="flex gap-2">
               <button
                 onClick={() => setDeleteConfirmModal({ open: false, type: 'permission', id: '', description: '' })}
-                className="px-4 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
+                className="flex-1 py-2 rounded-xl bg-gray-100 text-gray-700 font-bold text-xs"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmDelete}
                 disabled={actionLoading === deleteConfirmModal.id}
-                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors disabled:opacity-50"
+                className="flex-1 py-2 rounded-xl bg-rose-600 text-white font-bold text-xs hover:bg-rose-700 disabled:opacity-50"
               >
-                Yes, Delete
+                Delete Record
               </button>
             </div>
           </div>

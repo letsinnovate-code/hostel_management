@@ -5,6 +5,8 @@ const {
   getCurfewViolations,
   triggerManualCheck,
   verifyPresence,
+  markAttendance,
+  getHostelStudents,
   getPendingPermissions,
   approvePermission,
   rejectPermission,
@@ -18,11 +20,17 @@ const {
   deleteViolation,
   deleteCurfewViolation,
   getVisitors,
+  createVisitor,
   approveVisitor,
   rejectVisitor,
+  checkoutVisitor,
   deleteVisitor,
   getActiveEmergencies,
   acknowledgeEmergency,
+  createAnnouncement,
+  reportMaintenance,
+  getComplaints,
+  updateComplaintStatus,
 } = require('../controllers/wardenController');
 const { getStudentsWithAttendance } = require('../controllers/ownerController');
 const { protect, authorize } = require('../middleware/auth');
@@ -32,14 +40,16 @@ router.use(authorize('warden', 'owner'));
 
 // Dashboard & Students
 router.get('/dashboard', getDashboard);
+router.get('/students', getHostelStudents);
 router.get('/students/with-attendance', getStudentsWithAttendance);
 
 // Curfew Monitoring
 router.get('/curfew/violations', getCurfewViolations);
 
-// Presence Verification
+// Attendance & Presence Verification
 router.post('/attendance/trigger-check', triggerManualCheck);
 router.post('/attendance/verify', verifyPresence);
+router.post('/attendance/mark', markAttendance);
 
 // Permission Management
 router.get('/permissions/pending', getPendingPermissions);
@@ -47,7 +57,7 @@ router.post('/permissions/:permissionId/approve', approvePermission);
 router.post('/permissions/:permissionId/reject', rejectPermission);
 router.delete('/permissions/:permissionId', deletePermission);
 
-// Incident Reporting
+// Incident & Safety Reporting
 router.post('/incidents', createIncident);
 router.get('/incidents', getIncidents);
 
@@ -59,15 +69,26 @@ router.post('/violations/:violationId/escalate', escalateViolation);
 router.delete('/violations/:id', deleteViolation);
 router.delete('/curfew/violations/:id', deleteCurfewViolation);
 
-// Visitor Log
+// Visitor Log & Management
 router.get('/visitors', getVisitors);
+router.post('/visitors', createVisitor);
 router.post('/visitors/:visitorId/approve', approveVisitor);
 router.post('/visitors/:visitorId/reject', rejectVisitor);
+router.post('/visitors/:visitorId/checkout', checkoutVisitor);
 router.delete('/visitors/:visitorId', deleteVisitor);
 
 // Emergency Mode
 router.get('/emergencies', getActiveEmergencies);
 router.post('/emergencies/:emergencyId/acknowledge', acknowledgeEmergency);
 
+// Announcements & Broadcasts
+router.post('/announcements', createAnnouncement);
+
+// Complaints & Maintenance
+router.get('/complaints', getComplaints);
+router.put('/complaints/:id/status', updateComplaintStatus);
+router.post('/maintenance', reportMaintenance);
+
 module.exports = router;
+
 

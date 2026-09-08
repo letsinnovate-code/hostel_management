@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '../contexts/AuthContext';
@@ -10,9 +9,7 @@ import {
   ShieldAlert,
   FileCheck2,
   AlertTriangle,
-  Bell,
   LogOut,
-  Menu,
   X,
 } from 'lucide-react';
 
@@ -69,11 +66,11 @@ export default function WardenSidebar({ isOpen, onClose }: WardenSidebarProps) {
       {/* Sidebar container */}
       <aside
         className={`
-          fixed lg:static inset-y-0 left-0 z-50
+          fixed left-0 top-0 h-full z-50
           w-64 bg-white border-r border-gray-200
           transform ${isOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0
           transition-transform duration-300 ease-in-out
-          flex flex-col h-full
+          flex flex-col
         `}
       >
         {/* Header / Logo */}

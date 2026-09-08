@@ -6,6 +6,10 @@ const Complaint = require('../models/Complaint');
 const Visitor = require('../models/Visitor');
 const Emergency = require('../models/Emergency');
 const Rule = require('../models/Rule');
+const Room = require('../models/Room');
+const LeaveViolation = require('../modules/alert/models/LeaveViolation');
+const mongoose = require('mongoose');
+const { getBusinessDate, getBusinessDateString } = require('../services/timezoneService');
 // Alert module — CurfewViolation is the authoritative source for automated violations
 const CurfewViolation = require('../modules/alert/models/CurfewViolation');
 const CurfewAutomationService = require('../modules/alert/services/CurfewAutomationService');
@@ -52,15 +56,18 @@ async function resolveWardenHostelId(req) {
   // Warden role: strictly bound to assigned hostel
   let wardenHostelId = req.user?.hostelId;
   if (!wardenHostelId) {
-    const uDoc = await User.findById(req.user.id || req.user._id).select('hostelId').lean();
-    if (uDoc?.hostelId) wardenHostelId = uDoc.hostelId;
+    const userId = req.user?.id || req.user?._id;
+    if (userId && mongoose.isValidObjectId(userId)) {
+      const uDoc = await User.findById(userId).select('hostelId').lean();
+      if (uDoc?.hostelId) wardenHostelId = uDoc.hostelId;
+    }
   }
   return wardenHostelId ? String(wardenHostelId) : null;
 }
 
 // ============ LIVE DASHBOARD ============
 
-// Get Live Dashboard
+// Get Live Dashboard with Complete Operational Overview
 exports.getDashboard = async (req, res) => {
   try {
     const targetHostelId = await resolveWardenHostelId(req);
@@ -68,7 +75,17 @@ exports.getDashboard = async (req, res) => {
       return res.status(200).json({
         success: true,
         data: {
+          hostel: { id: null, name: 'No Hostel Assigned' },
           summary: { totalStudents: 0, inside: 0, outside: 0, pending: 0 },
+          studentStats: { total: 0, active: 0, onLeave: 0, absent: 0 },
+          roomStats: { totalRooms: 0, occupiedRooms: 0, partiallyOccupiedRooms: 0, vacantRooms: 0, maintenanceRooms: 0, totalCapacity: 0, totalOccupancy: 0, occupancyRate: 0 },
+          attendanceOverview: { presentToday: 0, absentToday: 0, lateArrivals: 0, attendancePercentage: 0, inside: [], outside: [], pending: [] },
+          leaveOverview: { pendingApplications: 0, approvedLeaves: 0, studentsOutside: 0, overdueReturns: 0, pendingList: [] },
+          complaintOverview: { newComplaints: 0, pendingComplaints: 0, inProgressComplaints: 0, resolvedComplaints: 0, highPriorityComplaints: 0, recentComplaints: [] },
+          maintenanceOverview: { newRequests: 0, pendingRequests: 0, inProgressRepairs: 0, completedRepairs: 0, emergencyMaintenance: 0, recentMaintenance: [] },
+          visitorOverview: { todayVisitors: 0, currentInside: 0, pendingRequests: 0, recentVisitors: [] },
+          disciplineOverview: { recentIncidents: [], studentsWithIssues: 0, pendingDisciplinaryActions: 0, curfewViolationsCount: 0 },
+          emergencyOverview: { activeEmergencies: [], hasActiveEmergency: false, recentIncidents: [] },
           attendance: { inside: [], outside: [], pending: [] },
           pendingPermissions: 0,
           activeViolations: 0,
@@ -79,6 +96,8 @@ exports.getDashboard = async (req, res) => {
           curfewStatus: {
             curfewTime: '21:00',
             curfewEndTime: '06:00',
+            weekendCurfewTime: '',
+            gracePeriodMinutes: 15,
             isCurfewActive: false,
             isManualCurfewActive: false,
           },
@@ -86,37 +105,113 @@ exports.getDashboard = async (req, res) => {
       });
     }
 
-    const filter = { hostelId: targetHostelId };
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(todayStart);
+    todayEnd.setDate(todayEnd.getDate() + 1);
+    const now = new Date();
 
-    const students = await User.find({ ...filter, role: 'student' });
-    const studentIds = students.map(s => s._id);
+    // Parallel fetch of all primary collections
+    const [
+      students,
+      rooms,
+      attendanceDocs,
+      pendingPermissionsDocs,
+      approvedPermissionsToday,
+      overdueLeaveViolations,
+      activeDisciplinaryDocs,
+      activeCurfewDocs,
+      allVisitors,
+      complaints,
+      activeEmergenciesDocs,
+      recentSafetyComplaints,
+      hostelDoc,
+    ] = await Promise.all([
+      // Students in this hostel
+      User.find({ hostelId: targetHostelId, role: 'student' }).select('name roomId status phone studentId email').lean(),
+      // Rooms in this hostel
+      Room.find({ hostelId: targetHostelId }).select('roomNumber capacity currentOccupancy status blockId floorNumber category').lean(),
+      // Today's attendance for this hostel
+      Attendance.find({
+        hostelId: targetHostelId,
+        date: { $gte: todayStart, $lt: todayEnd },
+      }).populate('studentId', 'name roomId status studentId phone').lean(),
+      // Pending permissions
+      Permission.find({
+        status: 'pending',
+      }).populate({
+        path: 'studentId',
+        match: { hostelId: targetHostelId },
+        select: 'name roomId phone studentId',
+      }).sort({ createdAt: -1 }).lean(),
+      // Approved permissions active today
+      Permission.find({
+        status: 'approved',
+        requestedDate: { $lte: todayEnd },
+        $or: [{ returnDate: null }, { returnDate: { $gte: todayStart } }],
+      }).populate({
+        path: 'studentId',
+        match: { hostelId: targetHostelId },
+        select: 'name roomId',
+      }).lean(),
+      // Overdue Leave Violations (from alert module)
+      LeaveViolation.find({
+        hostelId: targetHostelId,
+        status: { $in: ['open', 'escalated_to_parent', 'escalated_to_owner'] },
+      }).populate('studentId', 'name roomId phone').lean(),
+      // Pending Disciplinary Violations
+      Violation.find({
+        status: 'pending',
+      }).populate({
+        path: 'studentId',
+        match: { hostelId: targetHostelId },
+        select: 'name roomId phone',
+      }).sort({ createdAt: -1 }).lean(),
+      // Active Curfew Violations
+      CurfewViolation.find({
+        hostelId: targetHostelId,
+        status: { $in: ['open', 'pending_recheck'] },
+      }).populate('studentId', 'name roomId phone studentId').sort({ createdAt: -1 }).lean(),
+      // Visitors for students in this hostel
+      Visitor.find().populate({
+        path: 'visitingStudentId',
+        match: { hostelId: targetHostelId },
+        select: 'name roomId phone hostelId',
+      }).sort({ createdAt: -1 }).limit(100).lean(),
+      // Complaints in this hostel
+      Complaint.find({ hostelId: targetHostelId })
+        .populate('raisedBy', 'name phone roomId')
+        .populate('roomId', 'roomNumber')
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .lean(),
+      // Active Emergencies
+      Emergency.find({ status: 'active' }).populate({
+        path: 'raisedBy',
+        match: { hostelId: targetHostelId },
+        select: 'name roomId phone hostelId',
+      }).populate('acknowledgedBy', 'name').sort({ createdAt: -1 }).lean(),
+      // Recent Safety Incidents
+      Complaint.find({ hostelId: targetHostelId, complaintType: 'safety' })
+        .populate('raisedBy', 'name phone roomId')
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .lean(),
+      // Hostel configuration & rules
+      Hostel.findById(targetHostelId).select('rules name timezone').lean(),
+    ]);
 
-    const attendance = await Attendance.find({
-      studentId: { $in: studentIds },
-      date: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) },
-    }).populate('studentId', 'name roomId status');
+    // Filter populated arrays where studentId / visitingStudentId / raisedBy matched hostel
+    const studentIdsSet = new Set(students.map(s => String(s._id)));
+    const pendingPermissions = pendingPermissionsDocs.filter(p => p.studentId != null && studentIdsSet.has(String(p.studentId._id || p.studentId)));
+    const activeDisciplinary = activeDisciplinaryDocs.filter(d => d.studentId != null && studentIdsSet.has(String(d.studentId._id || d.studentId)));
+    const activeEmergencies = activeEmergenciesDocs.filter(e => e.raisedBy != null && studentIdsSet.has(String(e.raisedBy._id || e.raisedBy)));
+    const hostelVisitors = allVisitors.filter(v => v.visitingStudentId != null && studentIdsSet.has(String(v.visitingStudentId._id || v.visitingStudentId)));
+    const approvedLeavesToday = approvedPermissionsToday.filter(p => p.studentId != null && studentIdsSet.has(String(p.studentId._id || p.studentId)));
 
-    const inside = attendance.filter(a => a.status === 'inside');
-    const outside = attendance.filter(a => a.status === 'outside');
-    const pending = attendance.filter(a => a.status === 'pending');
-
-    const pendingPermissions = await Permission.find({
-      status: 'pending',
-      studentId: { $in: studentIds },
-    }).populate('studentId', 'name roomId phone studentId').sort({ createdAt: -1 });
-
-    const activeDisciplinary = await Violation.find({
-      status: 'pending',
-      studentId: { $in: studentIds },
-    }).populate('studentId', 'name roomId phone').sort({ createdAt: -1 }).lean();
-
-    const activeCurfew = await CurfewViolation.find({
-      hostelId: targetHostelId,
-      status: { $in: ['open', 'pending_recheck'] },
-    }).populate('studentId', 'name roomId phone studentId').sort({ createdAt: -1 }).lean();
-
+    // Combined active violations for backward compatibility and discipline overview
     const combinedViolations = [
-      ...activeCurfew.map((cv) => ({
+      ...activeCurfewDocs.map((cv) => ({
         ...cv,
         violationType: 'curfew',
         description: `Curfew breach (${cv.curfewTime || 'overnight'}) - ${cv.status === 'pending_recheck' ? 'In Grace Period' : 'Open Violation'}`,
@@ -128,16 +223,136 @@ exports.getDashboard = async (req, res) => {
       })),
     ];
 
-    const pendingVisitors = await Visitor.find({
-      visitingStudentId: { $in: studentIds },
-      status: 'pending',
-    }).populate('visitingStudentId', 'name roomId phone').sort({ createdAt: -1 });
+    // --- 1. STUDENT STATISTICS ---
+    const totalStudents = students.length;
+    const activeStudents = students.filter(s => s.status === 'active' || !s.status).length;
+    const studentsOnLeaveDirect = students.filter(s => s.status === 'on-leave').length;
+    const studentsWithApprovedLeave = approvedLeavesToday.length;
+    const studentsCurrentlyOnLeave = Math.max(studentsOnLeaveDirect, studentsWithApprovedLeave);
 
-    // Curfew status
-    const hostelDoc = await Hostel.findById(targetHostelId).select('rules name').lean();
-    const now = new Date();
+    // --- 2. ROOM STATISTICS ---
+    let totalRooms = rooms.length;
+    let totalCapacity = 0;
+    let totalOccupancy = 0;
+    let occupiedRooms = 0;
+    let partiallyOccupiedRooms = 0;
+    let vacantRooms = 0;
+    let maintenanceRooms = 0;
+
+    for (const r of rooms) {
+      const cap = Number(r.capacity) || 0;
+      const occ = Number(r.currentOccupancy) || 0;
+      totalCapacity += cap;
+      totalOccupancy += occ;
+
+      if (r.status === 'maintenance') {
+        maintenanceRooms++;
+      } else if (occ >= cap && cap > 0) {
+        occupiedRooms++;
+      } else if (occ > 0 && occ < cap) {
+        partiallyOccupiedRooms++;
+      } else if (occ === 0) {
+        vacantRooms++;
+      }
+    }
+    const occupancyRate = totalCapacity > 0 ? Math.round((totalOccupancy / totalCapacity) * 100) : 0;
+
+    // --- 3. ATTENDANCE OVERVIEW ---
+    const inside = attendanceDocs.filter(a => a.status === 'inside');
+    const outside = attendanceDocs.filter(a => a.status === 'outside');
+    const pending = attendanceDocs.filter(a => a.status === 'pending');
+    const presentToday = inside.length;
+    // Absent today = active students not inside and not on approved leave
+    const absentToday = Math.max(0, activeStudents - presentToday - studentsCurrentlyOnLeave);
+    const attendancePercentage = activeStudents > 0 ? Math.round((presentToday / activeStudents) * 100) : 0;
+
+    // Late arrivals calculation
     const isWeekend = [0, 6].includes(now.getDay());
     const curfewTimeStr = (isWeekend && hostelDoc?.rules?.weekendCurfewTime) || hostelDoc?.rules?.curfewTime || '21:00';
+    const [cHour, cMin] = curfewTimeStr.split(':').map(Number);
+    const curfewThresholdToday = new Date(todayStart);
+    curfewThresholdToday.setHours(cHour || 21, cMin || 0, 0, 0);
+
+    const lateArrivals = attendanceDocs.filter(a => {
+      if (!a.checkInTime) return false;
+      const cin = new Date(a.checkInTime);
+      return cin > curfewThresholdToday;
+    }).length + activeCurfewDocs.length;
+
+    // --- 4. LEAVE OVERVIEW ---
+    const pendingLeaveCount = pendingPermissions.length;
+    const approvedLeaveCount = approvedLeavesToday.length;
+    const studentsOutsideCount = outside.length;
+    // Overdue returns: approved leave where returnDate < now and student not inside
+    const insideStudentIds = new Set(inside.map(a => String(a.studentId?._id || a.studentId)));
+    const overdueApprovedLeaves = approvedLeavesToday.filter(p => {
+      if (!p.returnDate) return false;
+      const rDate = new Date(p.returnDate);
+      const sId = String(p.studentId?._id || p.studentId);
+      return rDate < now && !insideStudentIds.has(sId);
+    });
+    const overdueReturnsCount = Math.max(overdueLeaveViolations.length, overdueApprovedLeaves.length);
+
+    // --- 5. COMPLAINT OVERVIEW ---
+    const newComplaints = complaints.filter(c => c.status === 'open').length;
+    const pendingComplaints = complaints.filter(c => ['open', 'assigned'].includes(c.status)).length;
+    const inProgressComplaints = complaints.filter(c => c.status === 'in-progress').length;
+    const resolvedComplaints = complaints.filter(c => ['resolved', 'closed'].includes(c.status)).length;
+    const highPriorityComplaints = complaints.filter(c => ['high', 'urgent'].includes(c.priority) && !['resolved', 'closed'].includes(c.status)).length;
+
+    // --- 6. MAINTENANCE OVERVIEW ---
+    const maintenanceComplaints = complaints.filter(c => c.complaintType === 'maintenance');
+    const newMaintenance = maintenanceComplaints.filter(c => c.status === 'open').length;
+    const pendingMaintenance = maintenanceComplaints.filter(c => ['open', 'assigned'].includes(c.status)).length;
+    const inProgressMaintenance = maintenanceComplaints.filter(c => c.status === 'in-progress').length;
+    const completedMaintenance = maintenanceComplaints.filter(c => ['resolved', 'closed'].includes(c.status)).length;
+    const emergencyMaintenance = maintenanceComplaints.filter(c => ['high', 'urgent'].includes(c.priority) && !['resolved', 'closed'].includes(c.status)).length;
+
+    // --- 7. VISITOR OVERVIEW ---
+    const todayVisitors = hostelVisitors.filter(v => {
+      const vDate = v.visitDate ? new Date(v.visitDate) : new Date(v.createdAt);
+      return vDate >= todayStart && vDate < todayEnd;
+    }).length;
+    const currentVisitorsInside = hostelVisitors.filter(v => v.entryTime != null && v.exitTime == null && v.status === 'approved').length;
+    const pendingVisitors = hostelVisitors.filter(v => v.status === 'pending');
+
+    // --- 8. DISCIPLINE OVERVIEW ---
+    const studentsWithDisciplinarySet = new Set();
+    activeCurfewDocs.forEach(c => {
+      if (c.studentId) studentsWithDisciplinarySet.add(String(c.studentId._id || c.studentId));
+    });
+    activeDisciplinary.forEach(d => {
+      if (d.studentId) studentsWithDisciplinarySet.add(String(d.studentId._id || d.studentId));
+    });
+    const studentsWithIssues = studentsWithDisciplinarySet.size;
+    const pendingDisciplinaryActions = activeDisciplinary.length;
+
+    // --- 9. EMERGENCY & RECENT INCIDENTS ---
+    const hasActiveEmergency = activeEmergencies.length > 0;
+    const recentIncidentsCombined = [
+      ...activeEmergencies.map(e => ({
+        _id: e._id,
+        type: 'emergency',
+        title: `EMERGENCY: ${e.emergencyType?.toUpperCase() || 'ALERT'}`,
+        description: e.description || 'Emergency alert triggered',
+        createdAt: e.createdAt,
+        studentName: e.raisedBy?.name,
+        roomNumber: e.raisedBy?.roomId?.roomNumber || '—',
+        status: e.status,
+      })),
+      ...recentSafetyComplaints.map(sc => ({
+        _id: sc._id,
+        type: 'incident',
+        title: sc.title,
+        description: sc.description,
+        createdAt: sc.createdAt,
+        studentName: sc.raisedBy?.name,
+        roomNumber: sc.roomId?.roomNumber || '—',
+        status: sc.status,
+      })),
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 8);
+
+    // --- 10. CURFEW STATUS ---
     const curfewEndTimeStr = hostelDoc?.rules?.curfewEndTime || '06:00';
     const isManualActive = Boolean(hostelDoc?.rules?.isManualCurfewActive);
     const isCurfewActive = CurfewAutomationService.isCurfewActive(
@@ -152,10 +367,80 @@ exports.getDashboard = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
+        hostel: {
+          id: targetHostelId,
+          name: hostelDoc?.name || 'Hostel Campus',
+        },
+        studentStats: {
+          total: totalStudents,
+          active: activeStudents,
+          onLeave: studentsCurrentlyOnLeave,
+          absent: absentToday,
+        },
+        roomStats: {
+          totalRooms,
+          occupiedRooms,
+          partiallyOccupiedRooms,
+          vacantRooms,
+          maintenanceRooms,
+          totalCapacity,
+          totalOccupancy,
+          occupancyRate,
+        },
+        attendanceOverview: {
+          presentToday,
+          absentToday,
+          lateArrivals,
+          attendancePercentage,
+          inside,
+          outside,
+          pending,
+        },
+        leaveOverview: {
+          pendingApplications: pendingLeaveCount,
+          approvedLeaves: approvedLeaveCount,
+          studentsOutside: studentsOutsideCount,
+          overdueReturns: overdueReturnsCount,
+          pendingList: pendingPermissions.slice(0, 10),
+        },
+        complaintOverview: {
+          newComplaints,
+          pendingComplaints,
+          inProgressComplaints,
+          resolvedComplaints,
+          highPriorityComplaints,
+          recentComplaints: complaints.slice(0, 8),
+        },
+        maintenanceOverview: {
+          newRequests: newMaintenance,
+          pendingRequests: pendingMaintenance,
+          inProgressRepairs: inProgressMaintenance,
+          completedRepairs: completedMaintenance,
+          emergencyMaintenance,
+          recentMaintenance: maintenanceComplaints.slice(0, 8),
+        },
+        visitorOverview: {
+          todayVisitors,
+          currentInside: currentVisitorsInside,
+          pendingRequests: pendingVisitors.length,
+          recentVisitors: hostelVisitors.slice(0, 8),
+        },
+        disciplineOverview: {
+          recentIncidents: combinedViolations.slice(0, 10),
+          studentsWithIssues,
+          pendingDisciplinaryActions,
+          curfewViolationsCount: activeCurfewDocs.length,
+        },
+        emergencyOverview: {
+          activeEmergencies,
+          hasActiveEmergency,
+          recentIncidents: recentIncidentsCombined,
+        },
+        // Legacy & backward compatible keys
         summary: {
-          totalStudents: students.length,
-          inside: inside.length,
-          outside: outside.length,
+          totalStudents,
+          inside: presentToday,
+          outside: studentsOutsideCount,
           pending: pending.length,
         },
         attendance: {
@@ -163,7 +448,7 @@ exports.getDashboard = async (req, res) => {
           outside,
           pending,
         },
-        pendingPermissions: pendingPermissions.length,
+        pendingPermissions: pendingLeaveCount,
         activeViolations: combinedViolations.length,
         pendingVisitors: pendingVisitors.length,
         permissions: pendingPermissions,
@@ -184,6 +469,7 @@ exports.getDashboard = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error('getDashboard error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -908,4 +1194,330 @@ exports.acknowledgeEmergency = async (req, res) => {
     res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
+
+// ============ WARDEN QUICK ACTIONS & OPERATIONS ============
+
+// Mark Attendance (Quick Action)
+exports.markAttendance = async (req, res) => {
+  try {
+    const { studentId, status, notes } = req.body;
+    if (!studentId || !status) {
+      return res.status(400).json({ success: false, message: 'Student ID and status are required' });
+    }
+
+    if (!['inside', 'outside', 'on-leave', 'pending'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid attendance status' });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(400).json({ success: false, message: 'Warden has no assigned hostel' });
+    }
+
+    const student = await User.findById(studentId);
+    if (!student || String(student.hostelId) !== String(targetHostelId)) {
+      return res.status(404).json({ success: false, message: 'Student not found in this hostel' });
+    }
+
+    const hostel = await Hostel.findById(targetHostelId).select('timezone').lean();
+    const hostelTimezone = hostel?.timezone || 'Asia/Kolkata';
+    const now = new Date();
+    const businessDate = getBusinessDate(now, hostelTimezone);
+    const businessDateStr = getBusinessDateString(now, hostelTimezone);
+
+    let attendance = await Attendance.findOne({
+      studentId: student._id,
+      date: businessDate,
+    });
+
+    if (!attendance) {
+      attendance = new Attendance({
+        studentId: student._id,
+        hostelId: targetHostelId,
+        date: businessDate,
+        businessDate: businessDateStr,
+        source: 'warden',
+      });
+    }
+
+    attendance.status = status;
+    attendance.verifiedBy = req.user.id;
+    attendance.verificationMethod = 'manual';
+    attendance.verificationStatus = 'verified';
+
+    if (status === 'inside') {
+      attendance.checkInTime = now;
+    } else if (status === 'outside') {
+      attendance.checkOutTime = now;
+    }
+
+    await attendance.save();
+
+    // If marked on-leave, also update student profile status
+    if (status === 'on-leave' && student.status !== 'on-leave') {
+      student.status = 'on-leave';
+      await student.save();
+    } else if (status === 'inside' && student.status === 'on-leave') {
+      student.status = 'active';
+      await student.save();
+    }
+
+    // Gate Event log
+    await logGateEvent({
+      studentId: student._id,
+      hostelId: targetHostelId,
+      type: status === 'inside' ? 'in' : 'out',
+      time: now,
+      verificationMethod: 'manual',
+      attendanceId: attendance._id,
+      source: 'warden',
+    }).catch((err) => console.warn('GateEvent log (markAttendance):', err?.message));
+
+    // Handle curfew return if inside
+    if (status === 'inside') {
+      CurfewAutomationService.handleStudentReturn(String(student._id), now).catch((err) =>
+        console.warn('Curfew auto-resolve (markAttendance):', err?.message)
+      );
+      hostelEventEmitter.emit(hostelEventEmitter.EVENTS.CHECKIN, {
+        studentId: String(student._id),
+        hostelId: String(targetHostelId),
+        time: now,
+        source: 'warden',
+      });
+    } else {
+      hostelEventEmitter.emit(hostelEventEmitter.EVENTS.CHECKOUT, {
+        studentId: String(student._id),
+        hostelId: String(targetHostelId),
+        time: now,
+        source: 'warden',
+      });
+    }
+
+    res.status(200).json({ success: true, data: attendance, message: 'Attendance updated successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Get Hostel Students (for dropdown selectors)
+exports.getHostelStudents = async (req, res) => {
+  try {
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
+    const students = await User.find({ hostelId: targetHostelId, role: 'student' })
+      .select('name email phone roomId studentId status')
+      .populate('roomId', 'roomNumber')
+      .sort({ name: 1 })
+      .lean();
+
+    res.status(200).json({ success: true, data: students });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Create Visitor (Quick Action)
+exports.createVisitor = async (req, res) => {
+  try {
+    const { visitorName, visitorPhone, visitorIdProof, visitingStudentId, purpose, visitDate, autoApprove } = req.body;
+    if (!visitorName || !visitorPhone || !visitingStudentId || !purpose) {
+      return res.status(400).json({ success: false, message: 'Visitor name, phone, student, and purpose are required' });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    const student = await User.findById(visitingStudentId);
+    if (!student || String(student.hostelId) !== String(targetHostelId)) {
+      return res.status(404).json({ success: false, message: 'Visiting student not found in this hostel' });
+    }
+
+    const now = new Date();
+    const visitor = await Visitor.create({
+      visitorName,
+      visitorPhone,
+      visitorIdProof: visitorIdProof || '',
+      visitingStudentId,
+      purpose,
+      visitDate: visitDate ? new Date(visitDate) : now,
+      status: autoApprove ? 'approved' : 'pending',
+      approvedBy: autoApprove ? req.user.id : undefined,
+      entryTime: autoApprove ? now : undefined,
+    });
+
+    const populatedVisitor = await Visitor.findById(visitor._id).populate('visitingStudentId', 'name roomId phone');
+    res.status(201).json({ success: true, data: populatedVisitor, message: 'Visitor registered successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Checkout Visitor
+exports.checkoutVisitor = async (req, res) => {
+  try {
+    const { visitorId } = req.params;
+    const visitor = await Visitor.findById(visitorId).populate('visitingStudentId', 'hostelId');
+    if (!visitor) {
+      return res.status(404).json({ success: false, message: 'Visitor record not found' });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    const studentHostelId = String(visitor.visitingStudentId?.hostelId || '');
+    if (!studentHostelId || studentHostelId !== String(targetHostelId)) {
+      return res.status(403).json({ success: false, message: 'Not authorized for this hostel' });
+    }
+
+    visitor.exitTime = new Date();
+    visitor.status = 'completed';
+    await visitor.save();
+
+    res.status(200).json({ success: true, data: visitor, message: 'Visitor checked out successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Create Announcement (Quick Action)
+exports.createAnnouncement = async (req, res) => {
+  try {
+    const { title, message, type = 'announcement', targetAudience = 'all', priority = 'medium' } = req.body;
+    if (!title || !message) {
+      return res.status(400).json({ success: false, message: 'Title and message are required' });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(400).json({ success: false, message: 'Warden has no assigned hostel' });
+    }
+
+    let recipients = [];
+    if (targetAudience === 'all') {
+      const users = await User.find({ hostelId: targetHostelId }).select('_id');
+      recipients = users.map(u => u._id);
+    } else if (targetAudience === 'students') {
+      const students = await User.find({ hostelId: targetHostelId, role: 'student' }).select('_id');
+      recipients = students.map(s => s._id);
+    } else if (targetAudience === 'staff') {
+      const staff = await User.find({ hostelId: targetHostelId, role: { $in: ['cleaner', 'supervisor', 'security', 'warden'] } }).select('_id');
+      recipients = staff.map(s => s._id);
+    }
+
+    const notification = await Notification.create({
+      title,
+      message,
+      type,
+      priority,
+      targetAudience,
+      recipients,
+      createdBy: req.user.id,
+      hostelId: targetHostelId,
+    });
+
+    res.status(201).json({ success: true, data: notification, message: 'Announcement created successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Report Maintenance Issue (Quick Action)
+exports.reportMaintenance = async (req, res) => {
+  try {
+    const { title, description, roomId, priority = 'medium' } = req.body;
+    if (!title || !description) {
+      return res.status(400).json({ success: false, message: 'Title and description are required' });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(400).json({ success: false, message: 'Warden has no assigned hostel' });
+    }
+
+    const complaint = await Complaint.create({
+      raisedBy: req.user.id,
+      complaintType: 'maintenance',
+      title,
+      description,
+      roomId: roomId || undefined,
+      hostelId: targetHostelId,
+      priority: ['low', 'medium', 'high', 'urgent'].includes(priority) ? priority : 'medium',
+      status: 'open',
+    });
+
+    const populated = await Complaint.findById(complaint._id)
+      .populate('raisedBy', 'name')
+      .populate('roomId', 'roomNumber');
+
+    res.status(201).json({ success: true, data: populated, message: 'Maintenance request reported successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Get Complaints (Warden view)
+exports.getComplaints = async (req, res) => {
+  try {
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
+    const { status, type, priority } = req.query;
+    const filter = { hostelId: targetHostelId };
+
+    if (status && status !== 'all') {
+      filter.status = status;
+    }
+    if (type && type !== 'all') {
+      filter.complaintType = type;
+    }
+    if (priority && priority !== 'all') {
+      filter.priority = priority;
+    }
+
+    const complaints = await Complaint.find(filter)
+      .populate('raisedBy', 'name phone roomId')
+      .populate('roomId', 'roomNumber')
+      .populate('assignedTo', 'name')
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+
+    res.status(200).json({ success: true, data: complaints });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Update Complaint Status (Warden resolution)
+exports.updateComplaintStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, resolutionNotes, assignedTo } = req.body;
+
+    const complaint = await Complaint.findById(id);
+    if (!complaint) {
+      return res.status(404).json({ success: false, message: 'Complaint not found' });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (String(complaint.hostelId) !== String(targetHostelId)) {
+      return res.status(403).json({ success: false, message: 'Not authorized for this hostel complaint' });
+    }
+
+    if (status) complaint.status = status;
+    if (resolutionNotes != null) complaint.resolutionNotes = resolutionNotes;
+    if (assignedTo) complaint.assignedTo = assignedTo;
+    if (status === 'resolved' || status === 'closed') {
+      complaint.resolvedAt = new Date();
+    }
+    complaint.updatedAt = new Date();
+    await complaint.save();
+
+    res.status(200).json({ success: true, data: complaint, message: 'Complaint updated successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 
