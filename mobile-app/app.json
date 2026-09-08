@@ -75,7 +75,7 @@
       "reactCompiler": true
     },
     "extra": {
-      "apiUrl": "http://localhost:4000/api",
+      "apiUrl": "https://hostel-management-yjox.vercel.app/api",
       "router": {},
       "eas": {
         "projectId": "b71686a6-7361-47b3-a9b9-ad8f736ff35b"
