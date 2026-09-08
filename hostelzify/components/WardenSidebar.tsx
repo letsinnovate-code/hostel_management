@@ -10,6 +10,7 @@ import {
   FileCheck2,
   AlertTriangle,
   Users,
+  BedDouble,
   LogOut,
   X,
 } from 'lucide-react';
@@ -39,6 +40,11 @@ export default function WardenSidebar({ isOpen, onClose }: WardenSidebarProps) {
       label: 'Students',
       href: '/warden/students',
       icon: Users,
+    },
+    {
+      label: 'Rooms & Beds',
+      href: '/warden/rooms',
+      icon: BedDouble,
     },
     {
       label: 'Curfew & Alerts',
