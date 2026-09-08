@@ -8,6 +8,7 @@ import api from '../../../services/api';
 import { DollarSign, Plus, ChevronLeft, Building2, CreditCard, X, Calendar, Loader2, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useConfirmModal } from '../../../components/ConfirmModal';
+import toast from 'react-hot-toast';
 
 const FEE_TYPES = [
   { value: 'hostel_rent', label: 'Hostel rent' },
@@ -259,9 +260,10 @@ export default function OwnerFeeStructurePage() {
     setSeedingPlans(true);
     try {
       await api.seedPlans(selectedHostelId);
+      toast.success('Fee plans seeded successfully');
       loadPlans();
     } catch (err: any) {
-      alert(err.message || 'Failed to seed plans');
+      toast.error(err.message || 'Failed to seed plans');
     } finally {
       setSeedingPlans(false);
     }
@@ -271,9 +273,10 @@ export default function OwnerFeeStructurePage() {
     setUpdatingPlanId(planId);
     try {
       await api.updatePlan(planId, { amount });
+      toast.success('Plan amount updated');
       loadPlans();
     } catch (err: any) {
-      alert(err.message || 'Failed to update');
+      toast.error(err.message || 'Failed to update');
     } finally {
       setUpdatingPlanId(null);
     }
@@ -283,11 +286,11 @@ export default function OwnerFeeStructurePage() {
     e.preventDefault();
     if (!selectedHostelId || !feeForm.name.trim() || !feeForm.amount) return;
     if (feeForm.applicableTo === 'room_category' && feeForm.roomCategories.length === 0) {
-      alert('Select at least one room category');
+      toast.error('Select at least one room category');
       return;
     }
     if (feeForm.applicableTo === 'specific_rooms' && feeForm.roomIds.length === 0) {
-      alert('Select at least one room');
+      toast.error('Select at least one room');
       return;
     }
     setSaving(true);
@@ -303,11 +306,12 @@ export default function OwnerFeeStructurePage() {
       if (feeForm.applicableTo === 'room_category') payload.roomCategories = feeForm.roomCategories;
       if (feeForm.applicableTo === 'specific_rooms') payload.roomIds = feeForm.roomIds;
       await api.createFeeStructure(payload);
+      toast.success('Fee structure added');
       setFeeModalOpen(false);
       setFeeForm({ name: '', type: 'hostel_rent', amount: '', frequency: 'monthly', applicableTo: 'all', roomCategories: [], roomIds: [] });
       loadFees();
     } catch (err: any) {
-      alert(err.message || 'Failed to add');
+      toast.error(err.message || 'Failed to add');
     } finally {
       setSaving(false);
     }
@@ -330,12 +334,13 @@ export default function OwnerFeeStructurePage() {
         periodEnd: paymentForm.periodEnd ? new Date(paymentForm.periodEnd).toISOString() : undefined,
         planId: planId || undefined,
       });
+      toast.success('Payment entry created');
       setPaymentModalOpen(false);
       setPaymentForm({ studentId: '', type: 'hostel_rent', amount: '', dueDate: '', periodStart: '', periodEnd: '' });
       setApplicableFeeHint(null);
       loadPayments();
     } catch (err: any) {
-      alert(err.message || 'Failed to add');
+      toast.error(err.message || 'Failed to add');
     } finally {
       setSaving(false);
     }
@@ -345,9 +350,10 @@ export default function OwnerFeeStructurePage() {
     setMarkingPaid(paymentId);
     try {
       await api.updatePaymentStatus(paymentId, { status: 'paid', paymentMethod: 'cash' });
+      toast.success('Marked as paid');
       loadPayments();
     } catch (err: any) {
-      alert(err.message || 'Failed to update');
+      toast.error(err.message || 'Failed to update');
     } finally {
       setMarkingPaid(null);
     }
@@ -365,9 +371,10 @@ export default function OwnerFeeStructurePage() {
     setDeletingPaymentId(p._id);
     try {
       await api.deletePayment(p._id);
+      toast.success('Payment record removed');
       loadPayments();
     } catch (err: any) {
-      alert(err.message || 'Failed to delete');
+      toast.error(err.message || 'Failed to delete');
     } finally {
       setDeletingPaymentId(null);
     }

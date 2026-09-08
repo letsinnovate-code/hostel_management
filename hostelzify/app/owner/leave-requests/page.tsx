@@ -7,6 +7,7 @@ import { useOwnerHostel } from '../../../contexts/OwnerHostelContext';
 import api from '../../../services/api';
 import { Calendar, User, ChevronLeft, Check, X } from 'lucide-react';
 import Link from 'next/link';
+import toast from 'react-hot-toast';
 
 export default function OwnerLeaveRequestsPage() {
   const { user } = useAuth();
@@ -47,9 +48,10 @@ export default function OwnerLeaveRequestsPage() {
     setActing(permissionId);
     try {
       await api.approveLeaveRequest(permissionId);
+      toast.success('Leave request approved');
       loadLeave();
     } catch (e: any) {
-      alert(e.message || 'Failed to approve');
+      toast.error(e.message || 'Failed to approve');
     } finally {
       setActing(null);
     }
@@ -60,11 +62,12 @@ export default function OwnerLeaveRequestsPage() {
     setActing(rejectId);
     try {
       await api.rejectLeaveRequest(rejectId, rejectReason);
+      toast.success('Leave request rejected');
       setRejectId(null);
       setRejectReason('');
       loadLeave();
     } catch (e: any) {
-      alert(e.message || 'Failed to reject');
+      toast.error(e.message || 'Failed to reject');
     } finally {
       setActing(null);
     }

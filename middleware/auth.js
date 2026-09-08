@@ -13,7 +13,12 @@ exports.protect = async (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      console.error('[AuthMiddleware] CRITICAL: JWT_SECRET environment variable is not defined.');
+      return res.status(500).json({ success: false, message: 'Authentication service configuration error' });
+    }
+    const decoded = jwt.verify(token, jwtSecret);
     // Use .lean() to get raw document from MongoDB so role is always present (even when stored as array)
     const userDoc = await User.findById(decoded.id).select('-password').lean();
 
@@ -31,6 +36,7 @@ exports.protect = async (req, res, next) => {
       ...userDoc,
       role: role ?? roleRaw,
       roles: rolesArray,
+      currentRole: userDoc.currentRole || role || rolesArray[0],
       id: userDoc._id,
     };
     next();
@@ -47,15 +53,18 @@ exports.authorize = (...allowedRoles) => {
       : null;
     const userRoles = req.user?.roles && Array.isArray(req.user.roles) ? req.user.roles : (Array.isArray(userRole) ? userRole : userRole ? [userRole] : []);
     const currentRole = req.user?.currentRole || roleStr || userRoles[0];
+
     const hasPrimary = roleStr && allowedRoles.includes(roleStr);
     const hasAnyRole = userRoles.some((r) => allowedRoles.includes(r));
-    if (!hasPrimary && !hasAnyRole) {
+    const hasCurrent = currentRole && allowedRoles.includes(currentRole);
+
+    if (!hasPrimary && !hasAnyRole && !hasCurrent) {
       return res.status(403).json({
         success: false,
-        message: `User role ${roleStr ?? userRole} is not authorized to access this route`,
+        message: `User role ${currentRole || roleStr || userRole} is not authorized to access this route`,
       });
     }
-    if (!req.user.currentRole && userRoles.length > 1) {
+    if (!req.user.currentRole) {
       req.user.currentRole = currentRole;
     }
     next();

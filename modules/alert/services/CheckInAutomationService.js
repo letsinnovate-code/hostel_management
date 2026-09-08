@@ -41,6 +41,12 @@ class CheckInAutomationService {
    */
   static async handleCheckIn({ studentId, hostelId, time }) {
     try {
+      const checkInTime = new Date(time);
+
+      // Auto-resolve any pending curfew grace violation or record return time
+      const CurfewAutomationService = require('./CurfewAutomationService');
+      await CurfewAutomationService.handleStudentReturn(studentId, checkInTime);
+
       const hostel = await Hostel.findById(hostelId)
         .select('rules.curfewTime rules.weekendCurfewTime')
         .lean();
@@ -52,7 +58,6 @@ class CheckInAutomationService {
         hostel.rules?.curfewTime ||
         '21:00';
 
-      const checkInTime = new Date(time);
       const curfewDate = timeStrToDate(curfewTimeStr, checkInTime);
 
       // Detect late check-in (checked in AFTER curfew)

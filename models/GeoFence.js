@@ -65,5 +65,9 @@ const geoFenceSchema = new mongoose.Schema({
   },
 });
 
+geoFenceSchema.index({ hostelId: 1, isActive: 1 });
+geoFenceSchema.index({ hostelId: 1, createdAt: -1 });
+
 module.exports = mongoose.model('GeoFence', geoFenceSchema);
+
 

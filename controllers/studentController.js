@@ -18,13 +18,34 @@ const { validateLocation, validateLocationWithGeoFence } = require('../utils/loc
 const { createOrder, verifyPaymentSignature } = require('../utils/razorpay');
 const { setPeriodFromPlan } = require('../utils/paymentPeriod');
 const { sendViolationPushToStudent, sendCheckInPushToStudent } = require('../utils/notificationService');
+const { sendParentEmergencyEmail } = require('../utils/emailService');
 const { logGateEvent } = require('../utils/gateEventService');
 // Alert & Automation Module — event-driven integration
 const { hostelEventEmitter } = require('../modules/alert');
+const CurfewAutomationService = require('../modules/alert/services/CurfewAutomationService');
 const { ALERT_TYPES } = require('../modules/alert/utils/constants');
+const locationValidationService = require('../services/locationValidationService');
+const { getBusinessDate, getBusinessDateString, getBusinessDayRange } = require('../services/timezoneService');
 
 const CHECKOUT_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes: no check-in / no "left without checkout" violation
 const NOTIFICATION_DEDUPE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes: at most one auto check-in + one violation notification per window per student
+
+/**
+ * Safely extract client IP and user agent for attendance audit forensics
+ */
+function extractClientMetadata(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  const clientIp = forwarded ? forwarded.split(',')[0].trim() : req.socket?.remoteAddress || req.ip || 'unknown';
+  const userAgent = req.headers['user-agent'] || 'unknown';
+  return { clientIp, userAgent };
+}
+
+/**
+ * Structured attendance audit logging without leaking credentials
+ */
+function auditLogAttendance({ action, studentId, hostelId, status, code, distance, accuracy, ageSeconds, reason, ip }) {
+  console.log(`[ATTENDANCE_AUDIT] action=${action} student=${studentId} hostel=${hostelId} status=${status} code=${code || 'OK'} distance=${distance != null ? distance + 'm' : 'N/A'} accuracy=${accuracy != null ? accuracy + 'm' : 'N/A'} age=${ageSeconds != null ? ageSeconds + 's' : 'N/A'} ip=${ip || 'unknown'} ${reason ? 'reason="' + reason + '"' : ''}`);
+}
 
 // ============ PROFILE MANAGEMENT ============
 
@@ -86,16 +107,8 @@ exports.getStatus = async (req, res) => {
     if (!studentId) {
       return res.status(401).json({ success: false, message: 'User not found' });
     }
-    // Use same date boundaries and dayKey logic as owner getDailyAttendance so mobile shows same total as owner dashboard
+    // Use hostel timezone to calculate business day boundaries
     const now = new Date();
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(todayStart);
-    todayEnd.setHours(23, 59, 59, 999);
-    // Day key for "today" (same as owner: local midnight then ISO date string for grouping)
-    const todayDayKey = todayStart.toISOString().slice(0, 10);
-
-    // Get user with populated room and hostel
     const user = await User.findById(studentId)
       .populate({
         path: 'roomId',
@@ -103,17 +116,27 @@ exports.getStatus = async (req, res) => {
       })
       .populate({
         path: 'hostelId',
-        select: 'name',
+        select: 'name timezone',
       })
       .select('roomId hostelId');
 
-    // Fetch “current” record for status/checkIn/checkOut; fetch recent attendance to compute today’s total (same dayKey as owner)
+    const hostelTz = user?.hostelId?.timezone || 'Asia/Kolkata';
+    const dayRange = getBusinessDayRange(now, hostelTz);
+    const todayStart = dayRange.start;
+    const todayEnd = dayRange.end;
+    const todayDayKey = dayRange.dateStr;
+    const businessDate = getBusinessDate(now, hostelTz);
+
+    // Fetch current record for status/checkIn/checkOut
     const twoDaysAgo = new Date(todayStart);
     twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
     const [attendance, recentRecords] = await Promise.all([
       Attendance.findOne({
         studentId,
-        date: { $gte: todayStart, $lte: todayEnd },
+        $or: [
+          { date: businessDate },
+          { date: { $gte: todayStart, $lte: todayEnd } },
+        ],
       }).sort({ createdAt: -1 }),
       Attendance.find({
         studentId,
@@ -121,11 +144,10 @@ exports.getStatus = async (req, res) => {
       }).lean(),
     ]);
 
-    // Restrict to “today” using same dayKey as owner getDailyAttendance so mobile total matches owner (2h 2m)
+    // Restrict to “today” using same dayKey as owner getDailyAttendance
     const todayRecords = recentRecords.filter((r) => {
-      const d = new Date(r.date);
-      d.setHours(0, 0, 0, 0);
-      return d.toISOString().slice(0, 10) === todayDayKey;
+      const dStr = r.businessDate || getBusinessDateString(r.date, hostelTz);
+      return dStr === todayDayKey;
     });
 
     // Get last check-in from attendance history
@@ -178,114 +200,248 @@ exports.getStatus = async (req, res) => {
   }
 };
 
-// Check In – location-based: only when inside geo-fence; reject if within 2 min of checkout (server-side cooldown)
-// Optimized: single parallel read batch, then one findOneAndUpdate (no find+save).
+// Check In – location-based authoritative pipeline
+// Enforces: JWT identity/hostel, schema & coordinate validation, accuracy <= 100m, freshness <= 120s,
+// geofence containment, 2-min cooldown, attendance state machine (no double check-in overwrite),
+// normalized business date, and idempotent single GateEvent creation.
 exports.checkIn = async (req, res) => {
-  try {
-    const { location, autoCheckIn } = req.body;
-    const studentId = req.user?.id ?? req.user?._id;
+  const studentId = req.user?.id ?? req.user?._id;
+  const hostelId = req.user?.hostelId;
+  const { clientIp, userAgent } = extractClientMetadata(req);
 
-    if (!location || !location.latitude || !location.longitude) {
+  try {
+    const { autoCheckIn } = req.body;
+
+    // 1. Authoritative Request & Location Validation Pipeline (Issues 1, 2, 3, 14, 15)
+    const valResult = locationValidationService.validateLocationRequest(req.body);
+    if (!valResult.success) {
+      auditLogAttendance({
+        action: 'checkIn',
+        studentId,
+        hostelId,
+        status: 'REJECTED',
+        code: valResult.code,
+        reason: valResult.error,
+        ip: clientIp,
+      });
       return res.status(400).json({
         success: false,
-        message: 'Location coordinates (latitude, longitude) are required'
+        code: valResult.code,
+        message: valResult.error,
       });
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const { latitude, longitude, accuracyMeters, capturedAt, serverReceivedAt, ageSeconds, source } = valResult.canonicalLocation;
+    const location = { latitude, longitude };
 
-    // Single parallel batch: cooldown, hostel (minimal fields), geo-fence (minimal), and today's attendance
+    // 2. Parallel context load (hostel, active geofence, student last checkout)
     const [lastCheckout, hostel, geoFence] = await Promise.all([
       Attendance.findOne(
         { studentId, checkOutTime: { $exists: true, $ne: null } }
       ).sort({ checkOutTime: -1 }).select('checkOutTime').lean(),
-      Hostel.findById(req.user.hostelId).select('address').lean(),
-      GeoFence.findOne({ hostelId: req.user.hostelId, isActive: true })
+      Hostel.findById(hostelId).select('address timezone').lean(),
+      GeoFence.findOne({ hostelId, isActive: true })
         .sort({ createdAt: -1 })
         .select('type polygon bounds center radius')
         .lean(),
     ]);
 
+    if (!hostel) {
+      return res.status(404).json({ success: false, code: 'HOSTEL_NOT_FOUND', message: 'Hostel not found' });
+    }
+
+    const hostelTimezone = hostel.timezone || 'Asia/Kolkata';
+    const businessDate = getBusinessDate(serverReceivedAt, hostelTimezone);
+    const businessDateStr = getBusinessDateString(serverReceivedAt, hostelTimezone);
+
+    // 3. State Machine Invariant Check (Issue 6, Issue 22):
+    // If student is already inside, reject duplicate check-in. Never overwrite original checkInTime!
+    const existingAttendance = await Attendance.findOne({ studentId, date: businessDate });
+    if (existingAttendance && existingAttendance.status === 'inside') {
+      auditLogAttendance({
+        action: 'checkIn',
+        studentId,
+        hostelId,
+        status: 'REJECTED',
+        code: 'ALREADY_CHECKED_IN',
+        reason: 'Student is already checked in',
+        ip: clientIp,
+      });
+      return res.status(400).json({
+        success: false,
+        code: 'ALREADY_CHECKED_IN',
+        message: 'You are already checked in.',
+        checkInTime: existingAttendance.checkInTime,
+      });
+    }
+
+    // 4. Cooldown Check (2 minutes after checkout)
     if (lastCheckout?.checkOutTime) {
       const cooldownEndsAt = new Date(lastCheckout.checkOutTime).getTime() + CHECKOUT_COOLDOWN_MS;
       if (Date.now() < cooldownEndsAt) {
         return res.status(400).json({
           success: false,
+          code: 'COOLDOWN_ACTIVE',
           message: 'You can check in again 2 minutes after checkout. Please wait.',
           cooldownEndsAt,
         });
       }
     }
 
-    if (!hostel) {
-      return res.status(404).json({ success: false, message: 'Hostel not found' });
-    }
+    // 5. Authoritative Server-Side Geofence Evaluation (Issue 1, Issue 23)
+    const geofenceEval = locationValidationService.evaluateGeofence({
+      location,
+      hostel,
+      geoFence,
+      isCheckOut: false,
+    });
 
-    const hostelLocation = hostel.address?.coordinates?.latitude != null && hostel.address?.coordinates?.longitude != null
-      ? { latitude: hostel.address.coordinates.latitude, longitude: hostel.address.coordinates.longitude }
-      : null;
-
-    let isInsideHostel = false;
-    if (geoFence && geoFence.type === 'polygon' && geoFence.polygon && geoFence.polygon.length >= 3) {
-      const validation = validateLocationWithGeoFence(location, hostelLocation, { polygon: geoFence.polygon });
-      isInsideHostel = validation.isValid;
-    } else if (geoFence && geoFence.type === 'rectangle' && geoFence.bounds) {
-      const validation = validateLocationWithGeoFence(location, hostelLocation, { bounds: geoFence.bounds });
-      isInsideHostel = validation.isValid;
-    } else if (hostelLocation) {
-      const radius = geoFence?.type === 'circle' && geoFence?.radius != null ? geoFence.radius : 500;
-      const validation = geoFence?.center?.latitude != null
-        ? validateLocation(location, { latitude: geoFence.center.latitude, longitude: geoFence.center.longitude }, radius)
-        : validateLocation(location, hostelLocation, radius);
-      isInsideHostel = validation.isValid;
-    }
-
-    if (!isInsideHostel) {
+    if (!geofenceEval.isInside) {
+      auditLogAttendance({
+        action: 'checkIn',
+        studentId,
+        hostelId,
+        status: 'REJECTED',
+        code: geofenceEval.code,
+        distance: geofenceEval.distance,
+        accuracy: accuracyMeters,
+        ageSeconds,
+        reason: geofenceEval.message,
+        ip: clientIp,
+      });
       return res.status(400).json({
         success: false,
-        message: 'You must be inside the hostel boundary to check in.',
+        code: geofenceEval.code || 'OUTSIDE_GEOFENCE',
+        message: geofenceEval.message || 'You must be inside the hostel boundary to check in.',
+        distance: geofenceEval.distance,
       });
     }
 
+    // 6. Persistence: Atomic State Transition with Business Date Normalization (Issue 5, Issue 7, Issue 16)
     const now = new Date();
-    const attendance = await Attendance.findOneAndUpdate(
-      { studentId, date: { $gte: today } },
-      {
-        $set: {
-          status: 'inside',
-          checkInTime: now,
-          location,
-          verificationMethod: 'manual',
-        },
-        $setOnInsert: {
-          studentId,
-          hostelId: req.user.hostelId,
-          date: now,
-        },
-      },
-      { sort: { createdAt: -1 }, new: true, upsert: true }
-    );
+    let attendance;
+    let isStateTransition = false;
 
-    await logGateEvent({
+    try {
+      // Atomic compare-and-swap or insert: only succeed if record doesn't exist OR status is not 'inside'
+      attendance = await Attendance.findOneAndUpdate(
+        { studentId, date: businessDate, status: { $ne: 'inside' } },
+        {
+          $set: {
+            status: 'inside',
+            checkInTime: now,
+            location,
+            accuracy: accuracyMeters,
+            distanceFromHostel: geofenceEval.distance,
+            capturedAt,
+            serverReceivedAt,
+            clientIp,
+            userAgent,
+            source: autoCheckIn ? 'auto' : (source || 'web'),
+            verificationMethod: autoCheckIn ? 'auto' : 'manual',
+            verificationStatus: 'verified',
+            businessDate: businessDateStr,
+          },
+          $setOnInsert: {
+            studentId,
+            hostelId,
+            date: businessDate,
+          },
+        },
+        { sort: { createdAt: -1 }, new: true, upsert: true }
+      );
+      isStateTransition = true;
+    } catch (upsertErr) {
+      if (upsertErr.code === 11000) {
+        // Handled duplicate key race condition: check if canonical record is already inside
+        const existing = await Attendance.findOne({ studentId, date: businessDate });
+        if (existing && existing.status === 'inside') {
+          return res.status(400).json({
+            success: false,
+            code: 'ALREADY_CHECKED_IN',
+            message: 'Already checked in for today.',
+            data: {
+              status: 'inside',
+              checkInTime: existing.checkInTime,
+            },
+          });
+        }
+        // If existing record was outside and we raced on insert, update it atomically
+        attendance = await Attendance.findOneAndUpdate(
+          { studentId, date: businessDate, status: { $ne: 'inside' } },
+          {
+            $set: {
+              status: 'inside',
+              checkInTime: now,
+              location,
+              accuracy: accuracyMeters,
+              distanceFromHostel: geofenceEval.distance,
+              capturedAt,
+              serverReceivedAt,
+              clientIp,
+              userAgent,
+              source: autoCheckIn ? 'auto' : (source || 'web'),
+              verificationMethod: autoCheckIn ? 'auto' : 'manual',
+              verificationStatus: 'verified',
+              businessDate: businessDateStr,
+            },
+          },
+          { new: true }
+        );
+        if (!attendance) {
+          return res.status(400).json({
+            success: false,
+            code: 'ALREADY_CHECKED_IN',
+            message: 'Already checked in for today.',
+          });
+        }
+        isStateTransition = true;
+      } else {
+        throw upsertErr;
+      }
+    }
+
+    // 7. GateEvent Log: Exactly one event per transition with full telemetry (Issue 7, Issue 16)
+    if (isStateTransition && attendance) {
+      await logGateEvent({
+        studentId,
+        hostelId,
+        type: 'in',
+        time: now,
+        location,
+        accuracy: accuracyMeters,
+        distanceFromHostel: geofenceEval.distance,
+        capturedAt,
+        serverReceivedAt,
+        clientIp,
+        userAgent,
+        verificationMethod: autoCheckIn ? 'auto' : 'manual',
+        attendanceId: attendance._id,
+        source: autoCheckIn ? 'auto' : 'student',
+      }).catch((err) => console.warn('GateEvent log check-in:', err?.message));
+    }
+
+    // Audit Log (Issue 31)
+    auditLogAttendance({
+      action: 'checkIn',
       studentId,
-      hostelId: req.user.hostelId,
-      type: 'in',
-      time: now,
-      location,
-      verificationMethod: 'manual',
-      attendanceId: attendance._id,
-      source: 'student',
-    }).catch((err) => console.warn('GateEvent log check-in:', err?.message));
+      hostelId,
+      status: 'ACCEPTED',
+      distance: geofenceEval.distance,
+      accuracy: accuracyMeters,
+      ageSeconds,
+      ip: clientIp,
+    });
 
     const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
     const checkInTitle = autoCheckIn ? 'Auto check-in' : 'Check-in';
     const recentSame = await Notification.findOne({
       title: checkInTitle,
       recipients: studentId,
-      hostelId: req.user.hostelId,
+      hostelId,
       createdAt: { $gte: new Date(Date.now() - NOTIFICATION_DEDUPE_WINDOW_MS) },
     }).lean();
+
     if (!recentSame) {
       await Notification.create({
         title: checkInTitle,
@@ -296,7 +452,7 @@ exports.checkIn = async (req, res) => {
         targetAudience: 'staff',
         recipients: [studentId],
         createdBy: studentId,
-        hostelId: req.user.hostelId,
+        hostelId,
       }).catch((err) => console.warn('Check-in notification create:', err?.message));
     }
 
@@ -316,104 +472,184 @@ exports.checkIn = async (req, res) => {
 
     res.status(200).json({ success: true, data: attendance });
 
-    // ✅ Alert Module: emit check-in event for automation (late check-in detection, occupancy update)
-    // Non-blocking — runs after response is sent. Never affects API latency.
+    // Alert Module event
     hostelEventEmitter.emit(hostelEventEmitter.EVENTS.CHECKIN, {
       studentId: String(studentId),
-      hostelId: String(req.user.hostelId),
+      hostelId: String(hostelId),
       time: now,
       source: 'student',
     });
+
+    // Auto-resolve any active curfew grace period violation
+    CurfewAutomationService.handleStudentReturn(String(studentId), now).catch((err) =>
+      console.warn('Curfew auto-resolve:', err?.message)
+    );
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// Check Out – only when inside hostel; fast path: parallel minimal reads, single findOneAndUpdate (no find+save).
+// Check Out – location-based authoritative pipeline
+// Supports external boundary buffer (CHECKOUT_EXTERNAL_BUFFER_METERS = 300m) so students leaving
+// the gate are not trapped if they step outside before tapping check-out.
 exports.checkOut = async (req, res) => {
-  try {
-    const { location } = req.body;
-    const studentId = req.user?.id ?? req.user?._id;
+  const studentId = req.user?.id ?? req.user?._id;
+  const hostelId = req.user?.hostelId;
+  const { clientIp, userAgent } = extractClientMetadata(req);
 
-    if (!location || !location.latitude || !location.longitude) {
+  try {
+    // 1. Authoritative Request & Location Validation Pipeline (Issues 1, 2, 3, 14, 15)
+    const valResult = locationValidationService.validateLocationRequest(req.body);
+    if (!valResult.success) {
+      auditLogAttendance({
+        action: 'checkOut',
+        studentId,
+        hostelId,
+        status: 'REJECTED',
+        code: valResult.code,
+        reason: valResult.error,
+        ip: clientIp,
+      });
       return res.status(400).json({
         success: false,
-        message: 'Location coordinates (latitude, longitude) are required'
+        code: valResult.code,
+        message: valResult.error,
       });
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const { latitude, longitude, accuracyMeters, capturedAt, serverReceivedAt, ageSeconds, source } = valResult.canonicalLocation;
+    const location = { latitude, longitude };
 
-    // Parallel fetch: only fields needed for validation (lean + select)
+    // 2. Parallel fetch: hostel + active geofence
     const [hostel, geoFence] = await Promise.all([
-      Hostel.findById(req.user.hostelId).select('address').lean(),
-      GeoFence.findOne({ hostelId: req.user.hostelId, isActive: true })
+      Hostel.findById(hostelId).select('address timezone').lean(),
+      GeoFence.findOne({ hostelId, isActive: true })
         .sort({ createdAt: -1 })
         .select('type polygon bounds center radius')
         .lean(),
     ]);
 
     if (!hostel) {
-      return res.status(404).json({ success: false, message: 'Hostel not found' });
+      return res.status(404).json({ success: false, code: 'HOSTEL_NOT_FOUND', message: 'Hostel not found' });
     }
 
-    const hostelLocation = hostel.address?.coordinates?.latitude != null && hostel.address?.coordinates?.longitude != null
-      ? { latitude: hostel.address.coordinates.latitude, longitude: hostel.address.coordinates.longitude }
-      : null;
+    const hostelTimezone = hostel.timezone || 'Asia/Kolkata';
+    const businessDate = getBusinessDate(serverReceivedAt, hostelTimezone);
 
-    let isInsideHostel = false;
-    if (geoFence && geoFence.type === 'polygon' && geoFence.polygon && geoFence.polygon.length >= 3) {
-      const validation = validateLocationWithGeoFence(location, hostelLocation, { polygon: geoFence.polygon });
-      isInsideHostel = validation.isValid;
-    } else if (geoFence && geoFence.type === 'rectangle' && geoFence.bounds) {
-      const validation = validateLocationWithGeoFence(location, hostelLocation, { bounds: geoFence.bounds });
-      isInsideHostel = validation.isValid;
-    } else if (hostelLocation) {
-      const radius = geoFence?.type === 'circle' && geoFence?.radius != null ? geoFence.radius : 500;
-      const validation = geoFence?.center?.latitude != null
-        ? validateLocation(location, { latitude: geoFence.center.latitude, longitude: geoFence.center.longitude }, radius)
-        : validateLocation(location, hostelLocation, radius);
-      isInsideHostel = validation.isValid;
+    // 3. State Machine Invariant Check (Issue 8, Issue 22):
+    // Must have active inside attendance record for today or recent 24h
+    let attendanceDoc = await Attendance.findOne({ studentId, date: businessDate, status: 'inside' });
+    if (!attendanceDoc) {
+      attendanceDoc = await Attendance.findOne({
+        studentId,
+        status: 'inside',
+        checkInTime: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      }).sort({ createdAt: -1 });
     }
 
-    if (!isInsideHostel) {
+    if (!attendanceDoc) {
+      auditLogAttendance({
+        action: 'checkOut',
+        studentId,
+        hostelId,
+        status: 'REJECTED',
+        code: 'NOT_CHECKED_IN',
+        reason: 'No active inside attendance record found',
+        ip: clientIp,
+      });
       return res.status(400).json({
         success: false,
-        message: 'You must be inside the hostel boundary to check out.',
+        code: 'NOT_CHECKED_IN',
+        message: 'No active attendance record found. You must be checked in to check out.',
       });
     }
 
-    const checkOutTime = new Date();
-    const attendanceDoc = await Attendance.findOne({ studentId, date: { $gte: today }, status: 'inside' })
-      .sort({ createdAt: -1 });
-    if (!attendanceDoc) {
-      return res.status(404).json({ success: false, message: 'No active attendance record' });
+    // 4. Authoritative Geofence Check with Checkout External Buffer (Issue 8)
+    const geofenceEval = locationValidationService.evaluateGeofence({
+      location,
+      hostel,
+      geoFence,
+      isCheckOut: true,
+    });
+
+    if (!geofenceEval.isValid) {
+      auditLogAttendance({
+        action: 'checkOut',
+        studentId,
+        hostelId,
+        status: 'REJECTED',
+        code: 'OUTSIDE_GEOFENCE',
+        distance: geofenceEval.distance,
+        accuracy: accuracyMeters,
+        ageSeconds,
+        reason: geofenceEval.message,
+        ip: clientIp,
+      });
+      return res.status(400).json({
+        success: false,
+        code: 'OUTSIDE_GEOFENCE',
+        message: 'You are too far from the hostel boundary to check out.',
+        distance: geofenceEval.distance,
+      });
     }
+
+    // 5. Update Attendance Record
+    const checkOutTime = new Date();
     const sessionMinutes = attendanceDoc.checkInTime
       ? (checkOutTime.getTime() - new Date(attendanceDoc.checkInTime).getTime()) / 60000
       : 0;
+
     const attendance = await Attendance.findByIdAndUpdate(
       attendanceDoc._id,
       {
-        $set: { status: 'outside', checkOutTime, location },
+        $set: {
+          status: 'outside',
+          checkOutTime,
+          location,
+          accuracy: accuracyMeters,
+          distanceFromHostel: geofenceEval.distance,
+          capturedAt,
+          serverReceivedAt,
+          clientIp,
+          userAgent,
+          source: source || 'web',
+          verificationStatus: geofenceEval.isExactInside ? 'verified' : 'outside_buffer',
+        },
         $inc: { totalMinutesInside: Math.max(0, sessionMinutes) },
       },
       { new: true }
     );
 
+    // 6. GateEvent Log: Exactly one event with full telemetry (Issue 7, Issue 16)
     await logGateEvent({
       studentId,
-      hostelId: req.user.hostelId,
+      hostelId,
       type: 'out',
       time: checkOutTime,
       location,
+      accuracy: accuracyMeters,
+      distanceFromHostel: geofenceEval.distance,
+      capturedAt,
+      serverReceivedAt,
+      clientIp,
+      userAgent,
       verificationMethod: 'manual',
       attendanceId: attendanceDoc._id,
       source: 'student',
     }).catch((err) => console.warn('GateEvent log check-out:', err?.message));
 
     const cooldownEndsAt = checkOutTime.getTime() + CHECKOUT_COOLDOWN_MS;
+
+    auditLogAttendance({
+      action: 'checkOut',
+      studentId,
+      hostelId,
+      status: 'ACCEPTED',
+      distance: geofenceEval.distance,
+      accuracy: accuracyMeters,
+      ageSeconds,
+      ip: clientIp,
+    });
 
     res.status(200).json({
       success: true,
@@ -423,10 +659,10 @@ exports.checkOut = async (req, res) => {
       },
     });
 
-    // ✅ Alert Module: emit check-out event for automation (unauthorized checkout detection, occupancy update)
+    // Alert Module event
     hostelEventEmitter.emit(hostelEventEmitter.EVENTS.CHECKOUT, {
       studentId: String(studentId),
-      hostelId: String(req.user.hostelId),
+      hostelId: String(hostelId),
       time: checkOutTime,
       source: 'student',
     });
@@ -585,12 +821,17 @@ exports.getAttendanceAnalytics = async (req, res) => {
       }
     }
 
-    // Current status
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Current status via timezone-aware business date
+    const hostel = await Hostel.findById(req.user.hostelId).select('timezone').lean();
+    const hostelTz = hostel?.timezone || 'Asia/Kolkata';
+    const dayRange = getBusinessDayRange(new Date(), hostelTz);
+    const businessDate = getBusinessDate(new Date(), hostelTz);
     const todayRecord = await Attendance.findOne({
       studentId: req.user.id,
-      date: { $gte: today },
+      $or: [
+        { date: businessDate },
+        { date: { $gte: dayRange.start, $lte: dayRange.end } },
+      ],
     }).sort({ createdAt: -1 });
 
     res.status(200).json({
@@ -661,8 +902,16 @@ exports.cancelPermissionRequest = async (req, res) => {
     if (!permission) {
       return res.status(404).json({ success: false, message: 'Permission not found' });
     }
-    if (permission.studentId.toString() !== req.user.id) {
+    const currentUserId = (req.user.id || req.user._id).toString();
+    if (permission.studentId.toString() !== currentUserId) {
       return res.status(403).json({ success: false, message: 'Not authorized' });
+    }
+
+    if (permission.status !== 'pending' && permission.status !== 'approved') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot cancel a permission request that is already ${permission.status}`
+      });
     }
 
     permission.status = 'cancelled';
@@ -777,14 +1026,54 @@ exports.createEmergency = async (req, res) => {
       description,
     });
 
-    // Auto-notify parent if configured
-    if (req.user.parentContact?.phone) {
-      // In production, integrate with SMS/email service
-      emergency.parentNotified = true;
-      await emergency.save();
-    }
-
     res.status(201).json({ success: true, data: emergency });
+
+    // ── Non-blocking: send email to parent/guardian after response is sent ──
+    setImmediate(async () => {
+      try {
+        // Load full student data (parent contact) and hostel name in one pass
+        const [student, hostel] = await Promise.all([
+          User.findById(req.user.id).select('name parentContact hostelId').lean(),
+          Hostel.findById(req.user.hostelId).select('name contactDetails').lean(),
+        ]);
+
+        const parentEmail = student?.parentContact?.email;
+        const parentPhone = student?.parentContact?.phone;
+        const hostelName  = hostel?.name || 'Hostel';
+        // Use the first emergency contact number from hostel if available
+        const hostelContact = hostel?.contactDetails?.emergencyContact
+          || hostel?.contactDetails?.phone
+          || '';
+
+        if (parentEmail) {
+          const result = await sendParentEmergencyEmail({
+            parentEmail,
+            parentName  : student?.parentContact?.name || undefined,
+            studentName : student?.name || 'Your ward',
+            hostelName,
+            emergencyType: emergency.emergencyType,
+            description : description || '',
+            timestamp   : emergency.createdAt,
+            contactNumber: hostelContact,
+          });
+
+          if (result.success) {
+            // Update emergency record: parentNotified = true
+            await Emergency.findByIdAndUpdate(emergency._id, { $set: { parentNotified: true } });
+            console.log(`[Emergency] Parent notified via email for emergency ${emergency._id}`);
+          } else {
+            console.warn(`[Emergency] Parent email failed for ${emergency._id}:`, result.error || result.message);
+          }
+        } else if (parentPhone) {
+          // Phone exists but no email — log for future SMS integration
+          console.log(`[Emergency] Parent has phone (${parentPhone}) but no email — SMS not yet integrated.`);
+        } else {
+          console.log(`[Emergency] No parent contact on file for student ${req.user.id}.`);
+        }
+      } catch (err) {
+        console.error('[Emergency] Error in background parent notification:', err.message);
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1000,17 +1289,29 @@ exports.createRazorpayOrder = async (req, res) => {
     const studentId = req.user.id || req.user._id;
     const hostelId = req.user.hostelId;
     if (!hostelId) return res.status(400).json({ success: false, message: 'Not assigned to a hostel' });
-    const amountNum = Number(amount);
-    if (!amountNum || amountNum < 1) return res.status(400).json({ success: false, message: 'Invalid amount' });
+
+    let finalAmount = Number(amount);
+    // Security: Validate amount against authoritative FeeStructure if provided
+    if (feeStructureId) {
+      const fee = await FeeStructure.findOne({ _id: feeStructureId, hostelId });
+      if (fee && fee.amount) {
+        finalAmount = Number(fee.amount);
+      }
+    }
+
+    if (!finalAmount || finalAmount < 1 || isNaN(finalAmount)) {
+      return res.status(400).json({ success: false, message: 'Invalid payment amount' });
+    }
+
     const payment = await Payment.create({
       studentId,
       hostelId,
       type: type || 'hostel_rent',
-      amount: amountNum,
+      amount: finalAmount,
       status: 'pending',
       metadata: { feeStructureId },
     });
-    const orderData = await createOrder(amountNum, payment._id.toString(), { paymentId: payment._id.toString() });
+    const orderData = await createOrder(finalAmount, payment._id.toString(), { paymentId: payment._id.toString() });
     if (!orderData) {
       await Payment.findByIdAndDelete(payment._id);
       return res.status(503).json({ success: false, message: 'Payment gateway not configured' });
@@ -1105,99 +1406,127 @@ exports.updateLocation = async (req, res) => {
   try {
     const { location, accuracy } = req.body;
 
-    // Validate location is provided
-    if (!location || !location.latitude || !location.longitude) {
+    // Validate coordinates
+    const coordCheck = locationValidationService.validateCoordinates(location?.latitude, location?.longitude);
+    if (!coordCheck.valid) {
       return res.status(400).json({
         success: false,
-        message: 'Location coordinates (latitude, longitude) are required'
+        code: coordCheck.code,
+        message: coordCheck.error,
       });
     }
 
     const hostelId = req.user.hostelId;
 
-    // Parallel fetch: hostel + geo-fence (both only need hostelId)
+    // Parallel fetch: hostel + active geo-fence
     const [hostel, geoFence] = await Promise.all([
-      Hostel.findById(hostelId).select('address').lean(),
+      Hostel.findById(hostelId).select('address timezone').lean(),
       GeoFence.findOne({ hostelId, isActive: true }).sort({ createdAt: -1 }).lean(),
     ]);
 
     if (!hostel) {
-      return res.status(404).json({ success: false, message: 'Hostel not found' });
+      return res.status(404).json({ success: false, code: 'HOSTEL_NOT_FOUND', message: 'Hostel not found' });
     }
 
-    let isInsideHostel = false;
-    let distanceFromHostel = null;
-    const hostelLocation = hostel.address?.coordinates?.latitude != null && hostel.address?.coordinates?.longitude != null
-      ? { latitude: hostel.address.coordinates.latitude, longitude: hostel.address.coordinates.longitude }
-      : null;
-    if (geoFence && geoFence.type === 'polygon' && geoFence.polygon && geoFence.polygon.length >= 3) {
-      const validation = validateLocationWithGeoFence(location, hostelLocation, { polygon: geoFence.polygon });
-      isInsideHostel = validation.isValid;
-      distanceFromHostel = validation.distance;
-    } else if (geoFence && geoFence.type === 'rectangle' && geoFence.bounds && [geoFence.bounds.north, geoFence.bounds.south, geoFence.bounds.east, geoFence.bounds.west].every((v) => v != null)) {
-      const validation = validateLocationWithGeoFence(location, hostelLocation, { bounds: geoFence.bounds });
-      isInsideHostel = validation.isValid;
-      distanceFromHostel = validation.distance;
-    } else if (hostelLocation) {
-      const radius = geoFence?.type === 'circle' && geoFence?.radius != null ? geoFence.radius : 500;
-      const validation = geoFence?.center?.latitude != null
-        ? validateLocation(location, { latitude: geoFence.center.latitude, longitude: geoFence.center.longitude }, radius)
-        : validateLocation(location, hostelLocation, radius);
-      isInsideHostel = validation.isValid;
-      distanceFromHostel = validation.distance;
-    }
+    // Geofence containment evaluation
+    const geofenceEval = locationValidationService.evaluateGeofence({
+      location,
+      hostel,
+      geoFence,
+      isCheckOut: false,
+    });
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const isInsideHostel = geofenceEval.isInside;
+    const distanceFromHostel = geofenceEval.distance;
 
-    // Parallel: User update + Attendance find (both independent)
-    let [, attendance] = await Promise.all([
+    // Check GPS accuracy: only accurate fixes (<= max threshold) are permitted to trigger auto check-in
+    const isAccuracyAcceptable = accuracy != null &&
+      typeof accuracy === 'number' &&
+      !isNaN(accuracy) &&
+      isFinite(accuracy) &&
+      accuracy > 0 &&
+      accuracy <= locationValidationService.LOCATION_MAX_ACCURACY_METERS;
+
+    const now = new Date();
+    const hostelTimezone = hostel.timezone || 'Asia/Kolkata';
+    const businessDate = getBusinessDate(now, hostelTimezone);
+    const businessDateStr = getBusinessDateString(now, hostelTimezone);
+
+    // Save location to User and StudentLocation log
+    await Promise.all([
       User.findByIdAndUpdate(req.user.id, {
         currentLocation: {
           latitude: location.latitude,
           longitude: location.longitude,
-          timestamp: new Date(),
-          accuracy,
+          timestamp: now,
+          accuracy: accuracy != null ? Number(accuracy) : undefined,
         },
-        lastLocationUpdate: new Date(),
+        lastLocationUpdate: now,
       }, { new: false }),
-      Attendance.findOne({
+      StudentLocation.create({
         studentId: req.user.id,
-        date: { $gte: today },
-      }).sort({ createdAt: -1 }),
+        hostelId,
+        location: { latitude: location.latitude, longitude: location.longitude },
+        isInsideHostel,
+        distanceFromHostel,
+        accuracy: accuracy != null ? Number(accuracy) : undefined,
+        source: 'background',
+      }).catch((err) => console.warn('StudentLocation log error:', err?.message)),
     ]);
 
-    if (!attendance) {
-      const now = new Date();
-      attendance = await Attendance.create({
-        studentId: req.user.id,
-        hostelId: req.user.hostelId,
-        status: isInsideHostel ? 'inside' : 'outside',
-        checkInTime: isInsideHostel ? now : null,
-        checkOutTime: !isInsideHostel ? now : null,
-        location,
-        verificationMethod: 'auto',
-        date: new Date(),
-      });
-      await logGateEvent({
-        studentId: req.user.id,
-        hostelId: req.user.hostelId,
-        type: isInsideHostel ? 'in' : 'out',
-        time: now,
-        location,
-        verificationMethod: 'auto',
-        attendanceId: attendance._id,
-        source: 'auto',
-      }).catch((err) => console.warn('GateEvent log (create):', err?.message));
-    } else {
-      // Update status based on location
-      const previousStatus = attendance.status;
-      attendance.status = isInsideHostel ? 'inside' : 'outside';
-      attendance.location = location;
+    let attendance = await Attendance.findOne({
+      studentId: req.user.id,
+      date: businessDate,
+    }).sort({ createdAt: -1 });
 
-      // Track check-in/check-out times based on status changes
-      if (previousStatus === 'outside' && isInsideHostel) {
-        // Respect 2-min cooldown after checkout (same as manual check-in)
+    if (!attendance) {
+      const initialInside = isInsideHostel && isAccuracyAcceptable;
+      try {
+        attendance = await Attendance.create({
+          studentId: req.user.id,
+          hostelId,
+          status: initialInside ? 'inside' : 'outside',
+          checkInTime: initialInside ? now : null,
+          checkOutTime: !initialInside ? now : null,
+          location,
+          accuracy: accuracy != null ? Number(accuracy) : undefined,
+          distanceFromHostel,
+          verificationMethod: 'auto',
+          verificationStatus: initialInside ? 'verified' : (isAccuracyAcceptable ? 'verified' : 'stale_location'),
+          source: 'background',
+          date: businessDate,
+          businessDate: businessDateStr,
+        });
+      } catch (createErr) {
+        if (createErr.code === 11000) {
+          attendance = await Attendance.findOne({ studentId: req.user.id, date: businessDate });
+        } else {
+          throw createErr;
+        }
+      }
+
+      if (initialInside && attendance) {
+        await logGateEvent({
+          studentId: req.user.id,
+          hostelId,
+          type: 'in',
+          time: now,
+          location,
+          accuracy: accuracy != null ? Number(accuracy) : undefined,
+          distanceFromHostel,
+          verificationMethod: 'auto',
+          attendanceId: attendance._id,
+          source: 'auto',
+        }).catch((err) => console.warn('GateEvent log (create):', err?.message));
+      }
+    } else {
+      const previousStatus = attendance.status;
+      attendance.location = location;
+      if (accuracy != null) attendance.accuracy = Number(accuracy);
+      if (distanceFromHostel != null) attendance.distanceFromHostel = distanceFromHostel;
+
+      // Auto check-in transition: only if previously outside AND inside geofence AND fix is accurate
+      if (previousStatus === 'outside' && isInsideHostel && isAccuracyAcceptable) {
         const lastCheckout = await Attendance.findOne({
           studentId: req.user.id,
           checkOutTime: { $exists: true, $ne: null },
@@ -1205,24 +1534,31 @@ exports.updateLocation = async (req, res) => {
           .sort({ checkOutTime: -1 })
           .select('checkOutTime')
           .lean();
+
         const withinCooldown =
           lastCheckout?.checkOutTime &&
           Date.now() < new Date(lastCheckout.checkOutTime).getTime() + CHECKOUT_COOLDOWN_MS;
 
-        if (withinCooldown) {
-          attendance.status = 'outside';
-          attendance.location = location;
-          await attendance.save();
-        } else {
+        if (!withinCooldown) {
           const checkInTime = new Date();
+          attendance.status = 'inside';
           attendance.checkInTime = checkInTime;
+          attendance.verificationMethod = 'auto';
+          attendance.verificationStatus = 'verified';
           await attendance.save();
+
+          CurfewAutomationService.handleStudentReturn(String(req.user.id), checkInTime).catch((err) =>
+            console.warn('Curfew auto-resolve (auto):', err?.message)
+          );
+
           await logGateEvent({
             studentId: req.user.id,
-            hostelId: req.user.hostelId,
+            hostelId,
             type: 'in',
             time: checkInTime,
             location,
+            accuracy: accuracy != null ? Number(accuracy) : undefined,
+            distanceFromHostel,
             verificationMethod: 'auto',
             attendanceId: attendance._id,
             source: 'auto',
@@ -1232,9 +1568,10 @@ exports.updateLocation = async (req, res) => {
           const recentAutoCheckIn = await Notification.findOne({
             title: 'Auto check-in',
             recipients: req.user.id,
-            hostelId: req.user.hostelId,
+            hostelId,
             createdAt: { $gte: new Date(Date.now() - NOTIFICATION_DEDUPE_WINDOW_MS) },
           }).lean();
+
           if (!recentAutoCheckIn) {
             await Notification.create({
               title: 'Auto check-in',
@@ -1243,7 +1580,7 @@ exports.updateLocation = async (req, res) => {
               targetAudience: 'staff',
               recipients: [req.user.id],
               createdBy: req.user.id,
-              hostelId: req.user.hostelId,
+              hostelId,
             }).catch((err) => console.warn('Auto check-in notification create:', err?.message));
             setImmediate(() => {
               User.findById(req.user.id)
@@ -1330,6 +1667,14 @@ exports.updateLocation = async (req, res) => {
       } else {
         await attendance.save();
       }
+    }
+
+    // Curfew & Grace Timer Auto-Termination: If student is physically verified inside hostel geofence,
+    // automatically terminate any active curfew grace period or parent escalation timer immediately.
+    if (isInsideHostel) {
+      CurfewAutomationService.handleStudentReturn(String(req.user.id), new Date()).catch((err) =>
+        console.warn('Curfew auto-resolve (geofence entry):', err?.message)
+      );
     }
 
     // Defer StudentLocation create (analytics only) - respond fast, write in background

@@ -20,7 +20,7 @@ const notificationSchema = new mongoose.Schema({
   },
   targetAudience: {
     type: String,
-    enum: ['all', 'students', 'staff', 'wardens', 'cleaners'],
+    enum: ['all', 'students', 'staff', 'wardens', 'cleaners', 'owner', 'superadmin'],
     default: 'all',
   },
   recipients: [{
@@ -55,6 +55,12 @@ const notificationSchema = new mongoose.Schema({
     default: Date.now,
   },
 });
+
+// Indexes for fast audience query and notification feeds
+notificationSchema.index({ hostelId: 1, createdAt: -1 });
+notificationSchema.index({ targetAudience: 1, hostelId: 1 });
+notificationSchema.index({ 'isRead.userId': 1 });
+notificationSchema.index({ dismissedBy: 1 });
 
 module.exports = mongoose.model('Notification', notificationSchema);
 

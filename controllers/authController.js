@@ -11,21 +11,44 @@ exports.register = async (req, res) => {
   try {
     const { name, email, password, role, phone, hostelId, blockId, roomId, studentId, parentContact } = req.body;
 
-    // Normalize role to string (some clients send role as array e.g. ["owner"])
-    const roleStr = Array.isArray(role) ? role[0] : role;
+    // Type validation
+    if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ success: false, message: 'Please provide a valid email and password' });
+    }
 
-    const userExists = await User.findOne({ email });
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Security: Restrict role assignment on public registration endpoint
+    // Public self-registration is strictly for students. Non-student roles (owner, warden, cleaner, etc.)
+    // must be created through authorized admin endpoints (/api/owner/users, /api/superadmin/create-owner).
+    let assignedRole = 'student';
+    if (role) {
+      const requestedRole = Array.isArray(role) ? role[0] : String(role);
+      if (requestedRole !== 'student') {
+        // Only authenticated superadmin or owner can register non-student roles
+        const callerRole = req.user?.role;
+        const isAuthorized = callerRole === 'superadmin' || callerRole === 'owner';
+        if (!isAuthorized) {
+          return res.status(403).json({
+            success: false,
+            message: 'Forbidden: Public registration is restricted to students. Staff and owner accounts must be created by an administrator.',
+          });
+        }
+        assignedRole = requestedRole;
+      }
+    }
+
+    const userExists = await User.findOne({ email: normalizedEmail });
     if (userExists) {
       return res.status(400).json({ success: false, message: 'User already exists' });
     }
 
-    // Handle role - convert to array if single role provided
-    let rolesArray = Array.isArray(role) ? role : [role];
-    const currentRole = rolesArray[0];
+    const rolesArray = [assignedRole];
+    const currentRole = assignedRole;
 
     const user = await User.create({
       name,
-      email,
+      email: normalizedEmail,
       password,
       role: rolesArray,
       currentRole: currentRole,
@@ -33,13 +56,14 @@ exports.register = async (req, res) => {
       hostelId,
       blockId,
       roomId,
-      studentId,
+      studentId: studentId || undefined,
       parentContact,
     });
 
-
-
-
+    // Trigger welcome email asynchronously without blocking registration response
+    sendWelcomeEmail({ user }).catch((emailErr) => {
+      console.error(`[Auth] Welcome email delivery failed for ${user.email}:`, emailErr.message);
+    });
 
     const userRoles = Array.isArray(user.role) ? user.role : [user.role];
 
@@ -68,20 +92,21 @@ exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Please provide email and password' });
+    if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ success: false, message: 'Please provide valid email and password' });
     }
 
-    const user = await User.findOne({ email }).select('+password');
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
 
     if (!user) {
-      console.log(`Login attempt failed: User not found for email: ${email}`);
+      console.log(`Login attempt failed: User not found for email: ${normalizedEmail}`);
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
     const isPasswordValid = await user.matchPassword(password);
     if (!isPasswordValid) {
-      console.log(`Login attempt failed: Invalid password for email: ${email}`);
+      console.log(`Login attempt failed: Invalid password for email: ${normalizedEmail}`);
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
@@ -246,6 +271,7 @@ exports.registerStudentViaQR = async (req, res) => {
       role: ['student'],
       currentRole: 'student',
       hostelId,
+      studentId: username,
       dateOfBirth: dateOfBirth || undefined,
       address: address && Object.values(address).some((v) => v && v.trim && v.trim() !== '') ? address : undefined,
       parentContact: parentContact && Object.values(parentContact).some((v) => v && v.trim && v.trim() !== '') ? parentContact : undefined,
@@ -262,10 +288,11 @@ exports.registerStudentViaQR = async (req, res) => {
 
     // --- Send welcome email with credentials ---
     try {
-      await sendWelcomeEmail(user.email, user.name, hostelName, {
-        email: user.email,
-        password: autoPassword,
-        username,
+      await sendWelcomeEmail({
+        user,
+        temporaryPassword: autoPassword,
+        loginId: username,
+        hostelName,
       });
     } catch (emailErr) {
       console.error('Welcome email failed (non-fatal):', emailErr.message);

@@ -118,7 +118,7 @@ export default function BroadcastScreen() {
           <View style={styles.empty}>
             <Ionicons name="notifications-outline" size={56} color="#cbd5e1" />
             <Text style={styles.emptyText}>No notices yet</Text>
-            <Text style={styles.emptySubtext}>Tap "Send Notice" to create your first notice</Text>
+            <Text style={styles.emptySubtext}>{'Tap "Send Notice" to create your first notice'}</Text>
           </View>
         ) : (
           notifications.map((notification) => (

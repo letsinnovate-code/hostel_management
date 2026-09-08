@@ -105,41 +105,74 @@ function isInsidePolygon(point, polygon) {
 /**
  * Validate location against hostel: rectangle bounds, polygon, or circle radius
  * @param {Object} userLocation - {latitude, longitude}
- * @param {Object} hostelLocation - {latitude, longitude} (for circle)
- * @param {Object} options - { allowedRadius?, bounds?, polygon? }
+ * @param {Object} hostelLocation - {latitude, longitude} (for circle or centroid)
+ * @param {Object} options - { allowedRadius?, bounds?, polygon?, allowedBufferMeters? }
  * @returns {Object} { isValid, distance?, message }
  */
 function validateLocationWithGeoFence(userLocation, hostelLocation, options = {}) {
-  const { allowedRadius = 500, bounds, polygon } = options;
-  if (!userLocation || !userLocation.latitude || !userLocation.longitude) {
+  const { allowedRadius = 500, bounds, polygon, allowedBufferMeters = 0 } = options;
+  if (!userLocation || userLocation.latitude == null || userLocation.longitude == null) {
     return { isValid: false, distance: null, message: 'Location coordinates are required' };
   }
+
+  const distance = hostelLocation && hostelLocation.latitude != null && hostelLocation.longitude != null
+    ? calculateDistance(userLocation, hostelLocation)
+    : null;
+
   if (polygon && polygon.length >= 3) {
     const inside = isInsidePolygon(userLocation, polygon);
-    const distance = hostelLocation && hostelLocation.latitude != null
-      ? calculateDistance(userLocation, hostelLocation)
-      : null;
+    // If outside polygon but buffer is allowed (e.g. checkout), check if within buffer distance
+    let validWithBuffer = inside;
+    if (!inside && allowedBufferMeters > 0 && distance != null) {
+      // Conservative boundary check: if within (allowedRadius + buffer) of centroid
+      validWithBuffer = distance <= (allowedRadius + allowedBufferMeters);
+    }
+
     return {
-      isValid: inside,
+      isValid: validWithBuffer,
+      isExactInside: inside,
       distance: distance != null ? Math.round(distance) : null,
-      message: inside ? 'You are inside the hostel boundary.' : 'You are outside the hostel boundary.',
+      message: validWithBuffer
+        ? (inside ? 'You are inside the hostel boundary.' : 'You are within the permitted boundary buffer.')
+        : 'You are outside the hostel boundary.',
     };
   }
+
   if (bounds && [bounds.north, bounds.south, bounds.east, bounds.west].every((v) => v != null)) {
     const inside = isInsideBounds(userLocation, bounds);
-    const distance = hostelLocation && hostelLocation.latitude != null
-      ? calculateDistance(userLocation, hostelLocation)
-      : null;
+    let validWithBuffer = inside;
+    if (!inside && allowedBufferMeters > 0) {
+      // Buffer in degrees (~111.32 km per lat degree)
+      const degBuffer = allowedBufferMeters / 111320;
+      const bufferedBounds = {
+        north: bounds.north + degBuffer,
+        south: bounds.south - degBuffer,
+        east: bounds.east + degBuffer,
+        west: bounds.west - degBuffer,
+      };
+      validWithBuffer = isInsideBounds(userLocation, bufferedBounds);
+    }
+
     return {
-      isValid: inside,
+      isValid: validWithBuffer,
+      isExactInside: inside,
       distance: distance != null ? Math.round(distance) : null,
-      message: inside ? 'You are inside the hostel boundary.' : 'You are outside the hostel boundary.',
+      message: validWithBuffer
+        ? (inside ? 'You are inside the hostel boundary.' : 'You are within the permitted boundary buffer.')
+        : 'You are outside the hostel boundary.',
     };
   }
+
   if (!hostelLocation || hostelLocation.latitude == null || hostelLocation.longitude == null) {
     return { isValid: false, distance: null, message: 'Hostel location not configured' };
   }
-  return validateLocation(userLocation, hostelLocation, allowedRadius);
+
+  const effectiveRadius = allowedRadius + (allowedBufferMeters || 0);
+  const result = validateLocation(userLocation, hostelLocation, effectiveRadius);
+  return {
+    ...result,
+    isExactInside: distance != null ? distance <= allowedRadius : result.isValid,
+  };
 }
 
 module.exports = {

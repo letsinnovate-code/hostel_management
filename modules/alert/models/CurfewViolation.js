@@ -83,7 +83,7 @@ const curfewViolationSchema = new mongoose.Schema(
     // ─── Lifecycle ────────────────────────────────────────────────────
     status: {
       type: String,
-      enum: ['open', 'acknowledged', 'resolved', 'false_positive'],
+      enum: ['open', 'acknowledged', 'resolved', 'false_positive', 'pending_recheck'],
       default: 'open',
     },
     acknowledgedBy: {
@@ -103,10 +103,38 @@ const curfewViolationSchema = new mongoose.Schema(
     // Did the student eventually return?
     studentReturnedAt: Date,
 
+    // ─── Multi-Stage Grace Period & Escalation Tracking ──────────────
+    // Stage 0: Grace Period (10 mins), Stage 1: Confirmed Violation, Stage 2: Parent Escallated
+    stage: {
+      type: Number,
+      default: 0,
+    },
+    graceExpiresAt: Date,
+    tenMinRechecked: {
+      type: Boolean,
+      default: false,
+    },
+    tenMinRecheckedAt: Date,
+    parentNotified: {
+      type: Boolean,
+      default: false,
+    },
+    parentNotifiedAt: Date,
+    parentEmail: String,
+    locationVerified: {
+      type: Boolean,
+      default: false,
+    },
+    locationMethod: {
+      type: String,
+      enum: ['gps', 'attendance', 'manual', 'none'],
+      default: 'none',
+    },
+
     // ─── Escalation ───────────────────────────────────────────────────
     escalationLevel: {
       type: Number,
-      default: 0, // 0=warden, 1=admin, 2=superadmin, 3=parent
+      default: 0, // 0=warden, 1=admin/owner, 2=superadmin, 3=parent
     },
     escalatedAt: [Date],
 

@@ -34,7 +34,7 @@ export class MapErrorBoundary extends Component<Props, State> {
       return (
         <View style={styles.container}>
           <Ionicons name="map-outline" size={48} color="#94a3b8" />
-          <Text style={styles.title}>Map couldn't load</Text>
+          <Text style={styles.title}>{"Map couldn't load"}</Text>
           <Text style={styles.message}>
             {this.props.fallbackMessage ?? "The map view had a problem. You can still get directions below."}
           </Text>

@@ -2,13 +2,150 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState, ChangeEvent, MouseEvent } from 'react';
-import { Bell, BellOff } from 'lucide-react';
+import { useEffect, useMemo, useState, ChangeEvent, MouseEvent, useRef } from 'react';
+import { Bell, BellOff, Map, List, RefreshCw } from 'lucide-react';
 import { useAuth } from '../../../../contexts/AuthContext';
 import { useOwnerHostel } from '../../../../contexts/OwnerHostelContext';
 import { useConfirmModal } from '../../../../components/ConfirmModal';
 import { useToast } from '../../../../components/Toast';
 import api from '../../../../services/api';
+
+declare global {
+  interface Window { google: any; }
+}
+
+const PRESENCE_COLOR: Record<string, string> = {
+  inside: '#22c55e',
+  outside: '#f59e0b',
+};
+
+function StudentsMapView({ students }: { students: any[] }) {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const [mapInstance, setMapInstance] = useState<any>(null);
+  const markersRef = useRef<any[]>([]);
+  const infoWindowsRef = useRef<any[]>([]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !window.google) {
+      const script = document.createElement('script');
+      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}`;
+      script.async = true;
+      script.defer = true;
+      script.onload = () => setMapReady(true);
+      document.head.appendChild(script);
+    } else if (typeof window !== 'undefined' && window.google) {
+      setMapReady(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || !window.google || mapInstance) return;
+    const google = window.google;
+    const map = new google.maps.Map(mapRef.current, {
+      center: { lat: 28.6139, lng: 77.209 },
+      zoom: 14,
+      mapTypeControl: true,
+      streetViewControl: false,
+      fullscreenControl: true,
+    });
+    setMapInstance(map);
+  }, [mapReady]);
+
+  useEffect(() => {
+    if (!mapInstance || !window.google) return;
+    const google = window.google;
+    markersRef.current.forEach((m) => m.setMap(null));
+    infoWindowsRef.current.forEach((iw) => iw.close());
+    markersRef.current = [];
+    infoWindowsRef.current = [];
+
+    const withLoc = students.filter(
+      (s) => s.currentLocation && typeof s.currentLocation.latitude === 'number'
+    );
+    if (withLoc.length === 0) return;
+
+    const bounds = new google.maps.LatLngBounds();
+    withLoc.forEach((student) => {
+      const pos = { lat: student.currentLocation.latitude, lng: student.currentLocation.longitude };
+      bounds.extend(pos);
+      const color = PRESENCE_COLOR[student.presenceStatus] || '#94a3b8';
+      const marker = new google.maps.Marker({
+        position: pos,
+        map: mapInstance,
+        title: student.name,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 10,
+          fillColor: color,
+          fillOpacity: 1,
+          strokeColor: '#ffffff',
+          strokeWeight: 2,
+        },
+      });
+      markersRef.current.push(marker);
+      const div = document.createElement('div');
+      div.textContent = student.name;
+      const content = `<div style="padding:8px;font-family:system-ui,sans-serif;min-width:160px;"><p style="margin:0 0 2px;font-weight:600;color:#111;">${div.innerHTML}</p><p style="margin:0;font-size:12px;color:#6b7280;">${student.presenceStatus === 'inside' ? 'Checked In' : student.presenceStatus === 'outside' ? 'Checked Out' : 'Unknown'}</p>${student.email ? `<p style="margin:2px 0 0;font-size:11px;color:#9ca3af;">${student.email}</p>` : ''}</div>`;
+      const iw = new google.maps.InfoWindow({ content });
+      infoWindowsRef.current.push(iw);
+      marker.addListener('click', () => {
+        infoWindowsRef.current.forEach((w) => w.close());
+        iw.open(mapInstance, marker);
+      });
+    });
+    mapInstance.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
+  }, [mapInstance, students]);
+
+  const withLoc = students.filter((s) => s.currentLocation && typeof s.currentLocation.latitude === 'number');
+  const withoutLoc = students.filter((s) => !s.currentLocation || typeof s.currentLocation.latitude !== 'number');
+
+  return (
+    <div className="flex flex-col md:flex-row" style={{ minHeight: '500px' }}>
+      <div className="flex-1 relative min-h-[350px] md:min-h-0">
+        {!mapReady ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 m-4 rounded-xl">
+            <p className="text-sm text-gray-500">Loading map...</p>
+          </div>
+        ) : (
+          <div ref={mapRef} className="absolute inset-0 m-4 rounded-xl border border-gray-200 overflow-hidden" />
+        )}
+      </div>
+      <aside className="w-full md:w-72 bg-white border-t md:border-t-0 md:border-l border-gray-200 flex flex-col overflow-hidden max-h-[350px] md:max-h-none">
+        <div className="p-4 border-b border-gray-200">
+          <p className="text-sm font-semibold text-gray-900">On map: {withLoc.length}</p>
+          <div className="flex items-center gap-3 mt-1 text-xs">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 inline-block"/>Checked In</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500 inline-block"/>Checked Out</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-400 inline-block"/>Unknown</span>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2">
+          {withLoc.length === 0 ? (
+            <p className="text-sm text-gray-500 p-2">No students with shared location.</p>
+          ) : (
+            <ul className="space-y-1">
+              {withLoc.map((s: any) => (
+                <li key={s._id || s.id}>
+                  <Link href={`/owner/students/${s._id || s.id}`} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-gray-50 text-sm">
+                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: PRESENCE_COLOR[s.presenceStatus] || '#94a3b8' }} />
+                    <span className="font-medium text-gray-900 truncate">{s.name}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {withoutLoc.length > 0 && (
+          <div className="border-t border-gray-200 p-4">
+            <p className="text-xs text-gray-500 font-medium">No location: {withoutLoc.length} students</p>
+          </div>
+        )}
+      </aside>
+    </div>
+  );
+}
 
 const STATUS_FILTERS = [
   { label: 'All', value: 'all' },
@@ -57,10 +194,11 @@ export default function OwnerStudentsPresencePage() {
   const { showToast } = useToast();
   const { confirm } = useConfirmModal();
 
-  const { selectedHostel } = useOwnerHostel();
+  const { selectedHostel, hostels, loading: hostelsLoading } = useOwnerHostel();
   const [students, setStudents] = useState<any[]>([]);
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(false);
+  const [viewMode, setViewMode] = useState<'table' | 'map'>('table');
 
   useEffect(() => {
     if (!user) return;
@@ -71,11 +209,15 @@ export default function OwnerStudentsPresencePage() {
   }, [user, router]);
 
   useEffect(() => {
-    if (!user || user.role !== 'owner') return;
+    if (!user || user.role !== 'owner' || hostelsLoading) return;
     loadStudents();
-  }, [selectedHostel, filter, user]);
+  }, [selectedHostel, filter, user, hostelsLoading, hostels.length]);
 
   const loadStudents = async () => {
+    if (!hostelsLoading && hostels.length === 0) {
+      setStudents([]);
+      return;
+    }
     setLoading(true);
     try {
       const list = await api.getStudentsWithAttendance(selectedHostel || undefined);
@@ -175,19 +317,76 @@ export default function OwnerStudentsPresencePage() {
               Monitor check-in/check-out status and manage student lifecycle from a single view.
             </p>
           </div>
-          <Link
-            href="/owner/students/create"
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-          >
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Add Student
-          </Link>
+          <div className="flex items-center gap-2">
+            {/* View mode toggle */}
+            <div className="flex items-center bg-gray-100 rounded-lg p-1">
+              <button
+                type="button"
+                onClick={() => setViewMode('table')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                  viewMode === 'table' ? 'bg-white shadow text-gray-900' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <List className="w-4 h-4" />
+                Table
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('map')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                  viewMode === 'map' ? 'bg-white shadow text-gray-900' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <Map className="w-4 h-4" />
+                Map
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={loadStudents}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-300 hover:bg-gray-100 disabled:opacity-50 text-sm font-medium text-gray-700"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+            <Link
+              href="/owner/students/create"
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Add Student
+            </Link>
+          </div>
         </div>
       </div>
 
-      <div className="px-6 py-6 space-y-6">
+      {!hostelsLoading && hostels.length === 0 ? (
+        <div className="p-8 max-w-xl mx-auto text-center mt-12">
+          <div className="bg-white rounded-2xl p-8 border border-gray-200 shadow-sm">
+            <h2 className="text-xl font-semibold text-gray-900 mb-2">No Hostels Found</h2>
+            <p className="text-gray-500 mb-6 text-sm">
+              You haven&apos;t added any hostels yet. Add your first hostel to start managing students, rooms, and tracking attendance.
+            </p>
+            <Link
+              href="/owner/hostels/create"
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 transition"
+            >
+              Create Hostel
+            </Link>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Map view */}
+          {viewMode === 'map' && (
+            <div className="bg-white border-t border-gray-200">
+              <StudentsMapView students={students} />
+            </div>
+          )}
+
+      {viewMode === 'table' && <div className="px-6 py-6 space-y-6">
         <div className="bg-white rounded-lg shadow-sm p-6">
           <div className="flex flex-wrap gap-6">
             <div className="flex-1 min-w-[240px]">
@@ -390,7 +589,9 @@ export default function OwnerStudentsPresencePage() {
             </div>
           )}
         </div>
-      </div>
+      </div>}
+      </>
+      )}
     </div>
   );
 }

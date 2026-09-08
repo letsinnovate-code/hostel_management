@@ -8,15 +8,19 @@ const {
   getPendingPermissions,
   approvePermission,
   rejectPermission,
+  deletePermission,
   createIncident,
   getIncidents,
   createViolation,
   getViolations,
   updateViolation,
   escalateViolation,
+  deleteViolation,
+  deleteCurfewViolation,
   getVisitors,
   approveVisitor,
   rejectVisitor,
+  deleteVisitor,
   getActiveEmergencies,
   acknowledgeEmergency,
 } = require('../controllers/wardenController');
@@ -39,6 +43,7 @@ router.post('/attendance/verify', verifyPresence);
 router.get('/permissions/pending', getPendingPermissions);
 router.post('/permissions/:permissionId/approve', approvePermission);
 router.post('/permissions/:permissionId/reject', rejectPermission);
+router.delete('/permissions/:permissionId', deletePermission);
 
 // Incident Reporting
 router.post('/incidents', createIncident);
@@ -49,11 +54,14 @@ router.post('/violations', createViolation);
 router.get('/violations', getViolations);
 router.put('/violations/:id', updateViolation);
 router.post('/violations/:violationId/escalate', escalateViolation);
+router.delete('/violations/:id', deleteViolation);
+router.delete('/curfew/violations/:id', deleteCurfewViolation);
 
 // Visitor Log
 router.get('/visitors', getVisitors);
 router.post('/visitors/:visitorId/approve', approveVisitor);
 router.post('/visitors/:visitorId/reject', rejectVisitor);
+router.delete('/visitors/:visitorId', deleteVisitor);
 
 // Emergency Mode
 router.get('/emergencies', getActiveEmergencies);

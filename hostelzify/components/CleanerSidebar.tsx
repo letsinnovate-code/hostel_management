@@ -13,6 +13,7 @@ import {
     LogOut,
     ChevronDown,
     X,
+    Wrench,
 } from 'lucide-react';
 
 interface CleanerSidebarProps {
@@ -43,26 +44,28 @@ export default function CleanerSidebar({ isOpen, onClose }: CleanerSidebarProps)
 
     const menuItems = [
         {
-            title: 'Dashboard',
+            title: 'Dashboard & Tasks',
             icon: Home,
-            href: '/cleaner/dashboard', // Changed from /cleaner/tasks
+            href: '/cleaner/dashboard',
             color: '#0a7ea4',
+        },
+        {
+            title: 'Assigned Complaints',
+            icon: Wrench,
+            href: '/cleaner/complaints',
+            color: '#FF9800',
         },
         {
             title: 'Work Schedule',
             icon: Calendar,
+            href: '/cleaner/schedule',
             color: '#4CAF50',
-            subItems: [
-                { label: 'My Schedule', href: '/cleaner/schedule' },
-            ],
         },
         {
             title: 'My Profile',
             icon: User,
+            href: '/cleaner/profile',
             color: '#2196F3',
-            subItems: [
-                { label: 'Profile Settings', href: '/cleaner/profile' },
-            ],
         },
     ];
 
@@ -120,52 +123,28 @@ export default function CleanerSidebar({ isOpen, onClose }: CleanerSidebarProps)
                     <div className="flex-1 overflow-y-auto py-2 sidebar-scroll">
                         {menuItems.map((item, index) => {
                             const IconComponent = item.icon;
-                            const isActive = pathname === item.href || (item.subItems && item.subItems.some(sub => pathname === sub.href));
+                            const isActive = pathname === item.href;
 
                             return (
                                 <div key={index} className="mb-1">
-                                    {item.subItems ? (
-                                        item.subItems.map((subItem, subIndex) => (
-                                            <Link
-                                                key={subIndex}
-                                                href={subItem.href}
-                                                onClick={onClose}
-                                                className={`flex items-center space-x-3 px-4 py-3 mx-2 rounded-lg transition-all duration-200 group ${pathname === subItem.href
-                                                    ? 'bg-blue-100 border-l-4 border-blue-600 shadow-md'
-                                                    : 'hover:bg-gray-100 hover:shadow-sm'
-                                                    }`}
-                                            >
-                                                <div className={`p-1.5 rounded-md transition-colors ${pathname === subItem.href ? 'bg-blue-600' : 'bg-gray-100 group-hover:bg-gray-200'
-                                                    }`}>
-                                                    <IconComponent className={`w-4 h-4 transition-colors ${pathname === subItem.href ? 'text-white' : 'text-gray-600'
-                                                        }`} />
-                                                </div>
-                                                <span className={`font-medium text-sm transition-colors ${pathname === subItem.href ? 'text-blue-900 font-semibold' : 'text-gray-700 group-hover:text-gray-900'
-                                                    }`}>
-                                                    {subItem.label}
-                                                </span>
-                                            </Link>
-                                        ))
-                                    ) : (
-                                        <Link
-                                            href={item.href || '#'}
-                                            onClick={onClose}
-                                            className={`flex items-center space-x-3 px-4 py-3 mx-2 rounded-lg transition-all duration-200 group ${isActive
-                                                ? 'bg-blue-100 border-l-4 border-blue-600 shadow-md'
-                                                : 'hover:bg-gray-100 hover:shadow-sm'
-                                                }`}
-                                        >
-                                            <div className={`p-1.5 rounded-md transition-colors ${isActive ? 'bg-blue-600' : 'bg-gray-100 group-hover:bg-gray-200'
-                                                }`}>
-                                                <IconComponent className={`w-4 h-4 transition-colors ${isActive ? 'text-white' : 'text-gray-600'
-                                                    }`} />
-                                            </div>
-                                            <span className={`font-medium text-sm transition-colors ${isActive ? 'text-blue-900 font-semibold' : 'text-gray-700 group-hover:text-gray-900'
-                                                }`}>
-                                                {item.title}
-                                            </span>
-                                        </Link>
-                                    )}
+                                    <Link
+                                        href={item.href}
+                                        onClick={onClose}
+                                        className={`flex items-center space-x-3 px-4 py-3 mx-2 rounded-lg transition-all duration-200 group ${isActive
+                                            ? 'bg-blue-100 border-l-4 border-blue-600 shadow-md'
+                                            : 'hover:bg-gray-100 hover:shadow-sm'
+                                            }`}
+                                    >
+                                        <div className={`p-1.5 rounded-md transition-colors ${isActive ? 'bg-blue-600' : 'bg-gray-100 group-hover:bg-gray-200'
+                                            }`}>
+                                            <IconComponent className={`w-4 h-4 transition-colors ${isActive ? 'text-white' : 'text-gray-600'
+                                                }`} />
+                                        </div>
+                                        <span className={`font-medium text-sm transition-colors ${isActive ? 'text-blue-900 font-semibold' : 'text-gray-700 group-hover:text-gray-900'
+                                            }`}>
+                                            {item.title}
+                                        </span>
+                                    </Link>
                                 </div>
                             );
                         })}

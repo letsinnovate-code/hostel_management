@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../contexts/AuthContext';
 import { alertApi, AlertNotification } from '../../../services/alertApi';
+import api from '../../../services/api';
 import { useAlertSocket } from '../../../contexts/AlertSocketContext';
 import OwnerLayout from '../../../components/OwnerLayout';
 import {
@@ -12,6 +13,7 @@ import {
   ShieldAlert,
   Users,
   UserCheck,
+  Building2,
   GraduationCap,
   CheckCircle,
   AlertCircle,
@@ -223,8 +225,26 @@ export default function OwnerAlertsPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [markingAll, setMarkingAll] = useState(false);
   const [filter, setFilter] = useState({ priority: '', category: '' });
+  const [hostels, setHostels] = useState<any[]>([]);
+  const [selectedHostelId, setSelectedHostelId] = useState<string>('');
 
-  const hostelId = (user as any)?.selectedHostelId || user?.hostelId as string | undefined;
+  useEffect(() => {
+    async function fetchHostels() {
+      try {
+        const res = await api.getHostels();
+        const list = Array.isArray(res) ? res : res?.data || [];
+        setHostels(list);
+        if (list.length > 0 && !selectedHostelId) {
+          setSelectedHostelId(list[0]._id);
+        }
+      } catch (err) {
+        console.error('Failed to fetch owner hostels:', err);
+      }
+    }
+    fetchHostels();
+  }, []);
+
+  const effectiveHostelId = selectedHostelId || (user as any)?.selectedHostelId || (user?.hostelId as string | undefined);
 
   useEffect(() => {
     if (!user) { router.replace('/login'); return; }
@@ -232,16 +252,21 @@ export default function OwnerAlertsPage() {
     if (role !== 'owner' && role !== 'superadmin') { router.replace('/login'); return; }
     loadAll();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, page, filter]);
+  }, [user, page, filter, effectiveHostelId]);
 
   const loadAll = useCallback(async () => {
-    if (!hostelId) return;
     setLoading(true);
     try {
       const [alertsRes, statsRes, countRes] = await Promise.allSettled([
-        alertApi.getAlertNotifications({ hostelId, page, limit: 15, priority: filter.priority || undefined, category: filter.category || undefined }),
-        alertApi.getDashboardStats(hostelId),
-        alertApi.getUnreadCount(hostelId),
+        alertApi.getAlertNotifications({
+          hostelId: effectiveHostelId || undefined,
+          page,
+          limit: 15,
+          priority: filter.priority || undefined,
+          category: filter.category || undefined,
+        }),
+        effectiveHostelId ? alertApi.getDashboardStats(effectiveHostelId) : Promise.resolve(null),
+        alertApi.getUnreadCount(effectiveHostelId || undefined),
       ]);
 
       if (alertsRes.status === 'fulfilled') {
@@ -252,11 +277,11 @@ export default function OwnerAlertsPage() {
       if (countRes.status === 'fulfilled') setUnreadCount(countRes.value?.data?.count ?? countRes.value?.count ?? 0);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [hostelId, page, filter, setUnreadCount]);
+  }, [effectiveHostelId, page, filter, setUnreadCount]);
 
   const markAllRead = async () => {
     setMarkingAll(true);
-    try { await alertApi.markAllRead(hostelId); await loadAll(); }
+    try { await alertApi.markAllRead(effectiveHostelId || undefined); await loadAll(); }
     catch (e) { console.error(e); }
     finally { setMarkingAll(false); }
   };
@@ -293,7 +318,22 @@ export default function OwnerAlertsPage() {
                 </span>
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3 flex-wrap">
+              {hostels.length > 0 && (
+                <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-xl px-3 py-2 shadow-sm text-sm">
+                  <Building2 className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                  <select
+                    value={selectedHostelId}
+                    onChange={(e) => setSelectedHostelId(e.target.value)}
+                    className="bg-transparent border-none text-gray-800 text-sm font-medium focus:ring-0 focus:outline-none cursor-pointer pr-2"
+                  >
+                    <option value="">All Hostels</option>
+                    {hostels.map((h) => (
+                      <option key={h._id} value={h._id}>{h.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <button onClick={loadAll} disabled={loading} className="flex items-center gap-2 px-3 py-2 text-sm bg-white text-gray-600 rounded-lg border border-gray-200 hover:bg-gray-50 shadow-sm transition">
                 <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
                 Refresh
@@ -310,8 +350,8 @@ export default function OwnerAlertsPage() {
           {/* ── Stat Cards ─────────────────────────────────────────── */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             {[
-              { label: 'Total Alerts', value: stats?.totalAlerts ?? '—', icon: Bell, color: 'bg-indigo-500' },
-              { label: 'Unread', value: stats?.unreadAlerts ?? '—', icon: TrendingUp, color: 'bg-orange-500' },
+              { label: 'Total Alerts', value: stats?.totalAlerts ?? alerts.length, icon: Bell, color: 'bg-indigo-500' },
+              { label: 'Unread', value: stats?.unreadAlerts ?? unreadLocal, icon: TrendingUp, color: 'bg-orange-500' },
               { label: 'Curfew Violations', value: stats?.activeCurfewViolations ?? '—', icon: ShieldAlert, color: 'bg-red-500' },
               { label: 'Leave Violations', value: stats?.activeLeaveViolations ?? '—', icon: Activity, color: 'bg-purple-500' },
             ].map(({ label, value, icon: Icon, color }) => (
@@ -332,12 +372,12 @@ export default function OwnerAlertsPage() {
 
             {/* Left: Send panel (2/5) */}
             <div className="lg:col-span-2">
-              {hostelId ? (
-                <SendAlertPanel hostelId={hostelId} onSent={loadAll} />
+              {effectiveHostelId ? (
+                <SendAlertPanel hostelId={effectiveHostelId} onSent={loadAll} />
               ) : (
                 <div className="bg-white rounded-2xl border border-yellow-200 p-6 text-center">
                   <AlertTriangle className="w-8 h-8 text-yellow-500 mx-auto mb-2" />
-                  <p className="text-sm text-gray-600">Select a hostel to send alerts</p>
+                  <p className="text-sm text-gray-600">Select a hostel above to send custom announcements</p>
                 </div>
               )}
 

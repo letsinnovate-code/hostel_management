@@ -54,7 +54,7 @@ function getRoleIcon(role: string): keyof typeof Ionicons.glyphMap {
   switch (role?.toLowerCase()) {
     case 'warden': return 'shield-outline';
     case 'cleaner': return 'sparkles-outline';
-    case 'supervisor': return 'person-check-outline';
+    case 'supervisor': return 'checkmark-circle-outline';
     case 'security': return 'lock-closed-outline';
     default: return 'person-outline';
   }
@@ -345,7 +345,7 @@ export default function StaffScreen() {
           <View style={[styles.statCard, { borderLeftColor: '#15803d' }]}>
             <Text style={styles.statLabel}>Supervisors</Text>
             <Text style={[styles.statValue, { color: '#15803d' }]}>{staffByRole.supervisor}</Text>
-            <Ionicons name="person-check-outline" size={28} color="#15803d" style={styles.statIcon} />
+            <Ionicons name="checkmark-circle-outline" size={28} color="#15803d" style={styles.statIcon} />
           </View>
           <View style={[styles.statCard, { borderLeftColor: '#c2410c' }]}>
             <Text style={styles.statLabel}>Security</Text>

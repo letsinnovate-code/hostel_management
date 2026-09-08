@@ -121,7 +121,7 @@ const validateGetCurfewViolations = [
   ...validateHostelIdQuery,
   query('status')
     .optional()
-    .isIn(['open', 'acknowledged', 'resolved', 'false_positive'])
+    .isIn(['open', 'acknowledged', 'resolved', 'false_positive', 'pending_recheck', 'all'])
     .withMessage('Invalid curfew violation status'),
   query('date')
     .optional()

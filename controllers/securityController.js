@@ -5,11 +5,16 @@ const Hostel = require('../models/Hostel');
 // Get all checked-in students
 exports.getCheckedInStudents = async (req, res) => {
   try {
+    const hostelId = req.user.hostelId;
+    if (!hostelId) {
+      return res.status(400).json({ success: false, message: 'Hostel assignment required' });
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const checkedInStudents = await Attendance.find({
-      hostelId: req.user.hostelId,
+      hostelId,
       status: 'inside',
       date: { $gte: today },
     })
@@ -36,11 +41,16 @@ exports.getCheckedInStudents = async (req, res) => {
 // Get all checked-out students
 exports.getCheckedOutStudents = async (req, res) => {
   try {
+    const hostelId = req.user.hostelId;
+    if (!hostelId) {
+      return res.status(400).json({ success: false, message: 'Hostel assignment required' });
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const checkedOutStudents = await Attendance.find({
-      hostelId: req.user.hostelId,
+      hostelId,
       status: 'outside',
       date: { $gte: today },
     })
@@ -67,12 +77,17 @@ exports.getCheckedOutStudents = async (req, res) => {
 // Get all students attendance status
 exports.getAllStudentsStatus = async (req, res) => {
   try {
+    const hostelId = req.user.hostelId;
+    if (!hostelId) {
+      return res.status(400).json({ success: false, message: 'Hostel assignment required' });
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     // Get all students in the hostel
     const students = await User.find({
-      hostelId: req.user.hostelId,
+      hostelId,
       role: 'student',
       status: 'active',
     })
@@ -82,16 +97,17 @@ exports.getAllStudentsStatus = async (req, res) => {
 
     // Get today's attendance records
     const attendanceRecords = await Attendance.find({
-      hostelId: req.user.hostelId,
+      hostelId,
       date: { $gte: today },
     })
       .populate('studentId', 'name email phone studentId')
       .sort({ createdAt: -1 });
 
-    // Create a map of student attendance
+    // Create a map of student attendance (guarded against null/orphaned student references)
     const attendanceMap = new Map();
     attendanceRecords.forEach((record) => {
-      const studentId = record.studentId._id.toString();
+      const studentId = (record.studentId?._id || record.studentId)?.toString();
+      if (!studentId) return;
       if (!attendanceMap.has(studentId) || record.createdAt > attendanceMap.get(studentId).createdAt) {
         attendanceMap.set(studentId, record);
       }
@@ -138,22 +154,27 @@ exports.getAllStudentsStatus = async (req, res) => {
 // Get dashboard statistics
 exports.getDashboardStats = async (req, res) => {
   try {
+    const hostelId = req.user.hostelId;
+    if (!hostelId) {
+      return res.status(400).json({ success: false, message: 'Hostel assignment required' });
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const [checkedIn, checkedOut, totalStudents] = await Promise.all([
       Attendance.countDocuments({
-        hostelId: req.user.hostelId,
+        hostelId,
         status: 'inside',
         date: { $gte: today },
       }),
       Attendance.countDocuments({
-        hostelId: req.user.hostelId,
+        hostelId,
         status: 'outside',
         date: { $gte: today },
       }),
       User.countDocuments({
-        hostelId: req.user.hostelId,
+        hostelId,
         role: 'student',
         status: 'active',
       }),

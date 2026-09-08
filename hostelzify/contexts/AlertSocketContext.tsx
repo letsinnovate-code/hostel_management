@@ -32,6 +32,7 @@ interface AlertSocketContextType {
   connected: boolean;
   unreadCount: number;
   latestAlert: LiveAlert | null;
+  lastCurfewEvent: { type: string; data: any; timestamp: number } | null;
   incrementUnread: () => void;
   decrementUnread: (by?: number) => void;
   setUnreadCount: (n: number) => void;
@@ -44,6 +45,7 @@ const AlertSocketContext = createContext<AlertSocketContextType>({
   connected: false,
   unreadCount: 0,
   latestAlert: null,
+  lastCurfewEvent: null,
   incrementUnread: () => {},
   decrementUnread: () => {},
   setUnreadCount: () => {},
@@ -70,6 +72,7 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [latestAlert, setLatestAlert] = useState<LiveAlert | null>(null);
+  const [lastCurfewEvent, setLastCurfewEvent] = useState<{ type: string; data: any; timestamp: number } | null>(null);
 
   const incrementUnread = useCallback(() => setUnreadCount((c) => c + 1), []);
   const decrementUnread = useCallback(
@@ -122,11 +125,59 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
 
     // ── Curfew violation ────────────────────────────────────────────────────
     socket.on('curfew:violation', (data: { violation: any }) => {
+      setLastCurfewEvent({ type: 'curfew:violation', data, timestamp: Date.now() });
       toastManager.show(
         `⚠️ Curfew Violation: ${data.violation?.studentId?.name ?? 'A student'} is outside after curfew`,
         'warning',
         6000
       );
+    });
+
+    // ── Curfew timer auto-terminated (student returned inside geofence) ──────
+    socket.on('curfew:timer_terminated', (data: { studentName?: string; reason?: string }) => {
+      setLastCurfewEvent({ type: 'curfew:timer_terminated', data, timestamp: Date.now() });
+      toastManager.show(
+        `✅ Timer Terminated: ${data.studentName || 'Student'} returned inside geofence`,
+        'success',
+        5000
+      );
+    });
+
+    // ── Curfew escalation (15m grace expired or parent notified) ────────────
+    socket.on('curfew:escalated', (data: { studentName?: string; message?: string }) => {
+      setLastCurfewEvent({ type: 'curfew:escalated', data, timestamp: Date.now() });
+      toastManager.show(
+        `🚨 Curfew Escalation: ${data.studentName || 'Student'} - ${data.message || '15m grace expired'}`,
+        'error',
+        8000
+      );
+    });
+
+    // ── Curfew schedule updated ─────────────────────────────────────────────
+    socket.on('curfew:schedule_updated', (data: { curfewTime: string }) => {
+      setLastCurfewEvent({ type: 'curfew:schedule_updated', data, timestamp: Date.now() });
+      toastManager.show(
+        `⏰ Curfew Schedule Updated: Starts at ${data.curfewTime}`,
+        'info',
+        4000
+      );
+    });
+
+    // ── Curfew sweep completed ──────────────────────────────────────────────
+    socket.on('curfew:sweep_completed', (data: { summary?: any }) => {
+      setLastCurfewEvent({ type: 'curfew:sweep_completed', data, timestamp: Date.now() });
+      const summary = data.summary || {};
+      toastManager.show(
+        `🛡️ Curfew Sweep: ${summary.present || 0} Present, ${summary.outside || 0} in Grace Period`,
+        'info',
+        5000
+      );
+    });
+
+    // ── Curfew session ended ────────────────────────────────────────────────
+    socket.on('curfew:ended', (data: any) => {
+      setLastCurfewEvent({ type: 'curfew:ended', data, timestamp: Date.now() });
+      toastManager.show('🛑 Curfew session concluded by Warden.', 'info', 4000);
     });
 
     // ── Emergency broadcast ─────────────────────────────────────────────────
@@ -161,6 +212,7 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
         connected,
         unreadCount,
         latestAlert,
+        lastCurfewEvent,
         incrementUnread,
         decrementUnread,
         setUnreadCount,

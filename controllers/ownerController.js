@@ -1,4 +1,5 @@
 const bcrypt = require('bcryptjs');
+const { getOwnerHostelIds, assertOwnsHostel, assertHostelIdBelongsToOwner, getScopedHostelIds } = require('../middleware/ownerSecurity');
 const User = require('../models/User');
 const Hostel = require('../models/Hostel');
 const Block = require('../models/Block');
@@ -23,6 +24,7 @@ const StudentLocation = require('../models/StudentLocation');
 const Visitor = require('../models/Visitor');
 const { sendPushNotifications, sendExpoPushNotifications, isExpoPushToken, sendLeaveRequestUpdateToStudent } = require('../utils/notificationService');
 const { validateLocation } = require('../utils/locationValidation');
+const { validateGeoFenceConfig } = require('../services/locationValidationService');
 const { uploadImageToS3, uploadMultipleImagesToS3, deleteImageFromS3 } = require('../utils/s3Upload');
 const { geocodeAddress, getNearbyPlaces } = require('../utils/googleMaps');
 const { sendWelcomeEmail, sendStaffWelcomeEmail, sendApprovalEmail, sendNoticeEmail, sendBulkNoticeEmails } = require('../utils/emailService');
@@ -110,14 +112,16 @@ exports.createHostel = async (req, res) => {
   }
 };
 
-// Get All Hostels
+// Get All Hostels (Owners get only their hostels, Superadmin gets all)
 exports.getHostels = async (req, res) => {
   try {
+    const isSuperAdmin = req.user?.role === 'superadmin';
     const ownerId = req.user._id || req.user.id;
-    if (!ownerId) {
+    if (!isSuperAdmin && !ownerId) {
       return res.status(401).json({ success: false, message: 'User not found' });
     }
-    const hostels = await Hostel.find({ ownerId }).populate('ownerId');
+    const query = isSuperAdmin ? {} : { ownerId };
+    const hostels = await Hostel.find(query).populate('ownerId', 'name email phone');
     res.status(200).json({ success: true, count: hostels.length, data: hostels });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -127,11 +131,18 @@ exports.getHostels = async (req, res) => {
 // Get Single Hostel with full details
 exports.getHostel = async (req, res) => {
   try {
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    const ownerId = req.user._id || req.user.id;
     const hostel = await Hostel.findById(req.params.id)
       .populate('ownerId', 'name email phone');
 
     if (!hostel) {
       return res.status(404).json({ success: false, message: 'Hostel not found' });
+    }
+
+    // Security: owner can only access their own hostels (superadmin can access all)
+    if (!isSuperAdmin && String(hostel.ownerId?._id || hostel.ownerId) !== String(ownerId)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to access this hostel' });
     }
 
     // Fetch blocks separately since Hostel doesn't have a blocks field
@@ -179,9 +190,15 @@ exports.getHostel = async (req, res) => {
 // Update Hostel
 exports.updateHostel = async (req, res) => {
   try {
+    const ownerId = req.user._id || req.user.id;
     const hostel = await Hostel.findById(req.params.id);
     if (!hostel) {
       return res.status(404).json({ success: false, message: 'Hostel not found' });
+    }
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    // Security: owner can only modify their own hostels (superadmin can modify all)
+    if (!isSuperAdmin && String(hostel.ownerId) !== String(ownerId)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to modify this hostel' });
     }
 
     // Update basic fields
@@ -286,6 +303,10 @@ exports.uploadHostelImages = async (req, res) => {
     if (!hostel) {
       return res.status(404).json({ success: false, message: 'Hostel not found' });
     }
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    if (!isSuperAdmin && String(hostel.ownerId) !== String(ownerId)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to modify this hostel' });
+    }
 
     // Upload images to S3
     const imageUrls = await uploadMultipleImagesToS3(files, 'hostels');
@@ -321,6 +342,10 @@ exports.deleteHostelImage = async (req, res) => {
     const hostel = await Hostel.findById(hostelId);
     if (!hostel) {
       return res.status(404).json({ success: false, message: 'Hostel not found' });
+    }
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    if (!isSuperAdmin && String(hostel.ownerId) !== String(ownerId)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to modify this hostel' });
     }
 
     // Remove from array
@@ -359,6 +384,10 @@ exports.setCoverImage = async (req, res) => {
     if (!hostel) {
       return res.status(404).json({ success: false, message: 'Hostel not found' });
     }
+    const ownerId = req.user._id || req.user.id;
+    if (String(hostel.ownerId) !== String(ownerId)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to modify this hostel' });
+    }
 
     if (!hostel.images.includes(imageUrl)) {
       return res.status(400).json({ success: false, message: 'Image not found in hostel images' });
@@ -376,10 +405,16 @@ exports.setCoverImage = async (req, res) => {
 // Delete Hostel
 exports.deleteHostel = async (req, res) => {
   try {
-    const hostel = await Hostel.findByIdAndDelete(req.params.id);
+    const ownerId = req.user._id || req.user.id;
+    const hostel = await Hostel.findById(req.params.id);
     if (!hostel) {
       return res.status(404).json({ success: false, message: 'Hostel not found' });
     }
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    if (!isSuperAdmin && String(hostel.ownerId) !== String(ownerId)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to delete this hostel' });
+    }
+    await Hostel.findByIdAndDelete(req.params.id);
     res.status(200).json({ success: true, message: 'Hostel deleted' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -389,46 +424,40 @@ exports.deleteHostel = async (req, res) => {
 // Create Block
 exports.createBlock = async (req, res) => {
   try {
+    await assertOwnsHostel(req, req.body.hostelId);
     const block = await Block.create(req.body);
     res.status(201).json({ success: true, data: block });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 // Get Blocks
 exports.getBlocks = async (req, res) => {
   try {
+    await assertOwnsHostel(req, req.params.hostelId);
     const blocks = await Block.find({ hostelId: req.params.hostelId })
       .populate('hostelId')
       .populate('floors.rooms');
     res.status(200).json({ success: true, data: blocks });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 // Create Room
 exports.createRoom = async (req, res) => {
   try {
-    const Hostel = require('../models/Hostel');
     const { hostelId, ...rest } = req.body;
-    // Validate hostel belongs to owner when hostelId is provided
-    if (hostelId) {
-      const hostel = await Hostel.findById(hostelId);
-      if (!hostel) {
-        return res.status(400).json({ success: false, message: 'Hostel not found' });
-      }
-      const ownerId = req.user._id || req.user.id;
-      if (!ownerId || String(hostel.ownerId) !== String(ownerId)) {
-        return res.status(403).json({ success: false, message: 'Not authorized to add rooms to this hostel' });
-      }
+    if (!hostelId) {
+      return res.status(400).json({ success: false, message: 'Hostel ID is required' });
     }
-    const room = await Room.create({ ...rest, hostelId: hostelId || undefined });
+    await assertOwnsHostel(req, hostelId);
+    const room = await Room.create({ ...rest, hostelId });
     const populated = await Room.findById(room._id).populate('hostelId', 'name').populate('blockId', 'name');
     res.status(201).json({ success: true, data: populated || room });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -438,7 +467,12 @@ exports.getRooms = async (req, res) => {
     const User = require('../models/User');
     const { hostelId, blockId, status, category } = req.query;
     const filter = {};
-    if (hostelId) filter.hostelId = hostelId;
+    // Security: scope rooms to owner's hostels only
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
+    }
+    filter.hostelId = { $in: scopedHostelIds };
     if (req.params.blockId) {
       filter.blockId = req.params.blockId;
     } else if (blockId) {
@@ -464,7 +498,7 @@ exports.getRooms = async (req, res) => {
 
     res.status(200).json({ success: true, count: rooms.length, data: rooms });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -480,6 +514,9 @@ exports.getRoom = async (req, res) => {
     if (!room) {
       return res.status(404).json({ success: false, message: 'Room not found' });
     }
+    if (room.hostelId) {
+      await assertOwnsHostel(req, room.hostelId._id || room.hostelId);
+    }
 
     // If students array is empty, fetch students by roomId from User model
     if (!room.students || room.students.length === 0) {
@@ -490,24 +527,23 @@ exports.getRoom = async (req, res) => {
 
     res.status(200).json({ success: true, data: room });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 // Update Room
 exports.updateRoom = async (req, res) => {
   try {
-    const Hostel = require('../models/Hostel');
+    const existingRoom = await Room.findById(req.params.id);
+    if (!existingRoom) {
+      return res.status(404).json({ success: false, message: 'Room not found' });
+    }
+    if (existingRoom.hostelId) {
+      await assertOwnsHostel(req, existingRoom.hostelId);
+    }
     const { hostelId, ...rest } = req.body;
-    if (hostelId != null) {
-      const hostel = await Hostel.findById(hostelId);
-      if (!hostel) {
-        return res.status(400).json({ success: false, message: 'Hostel not found' });
-      }
-      const ownerId = req.user._id || req.user.id;
-      if (!ownerId || String(hostel.ownerId) !== String(ownerId)) {
-        return res.status(403).json({ success: false, message: 'Not authorized to assign room to this hostel' });
-      }
+    if (hostelId) {
+      await assertOwnsHostel(req, hostelId);
     }
     const updatePayload = { ...rest };
     if (hostelId !== undefined) updatePayload.hostelId = hostelId || null;
@@ -518,12 +554,9 @@ exports.updateRoom = async (req, res) => {
       .populate('hostelId', 'name')
       .populate('blockId', 'name')
       .populate('students');
-    if (!room) {
-      return res.status(404).json({ success: false, message: 'Room not found' });
-    }
     res.status(200).json({ success: true, data: room });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -533,6 +566,9 @@ exports.deleteRoom = async (req, res) => {
     const room = await Room.findById(req.params.id);
     if (!room) {
       return res.status(404).json({ success: false, message: 'Room not found' });
+    }
+    if (room.hostelId) {
+      await assertOwnsHostel(req, room.hostelId);
     }
 
     // Delete images from S3
@@ -549,7 +585,7 @@ exports.deleteRoom = async (req, res) => {
     await Room.findByIdAndDelete(req.params.id);
     res.status(200).json({ success: true, message: 'Room deleted successfully' });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -566,6 +602,9 @@ exports.uploadRoomImages = async (req, res) => {
     const room = await Room.findById(roomId);
     if (!room) {
       return res.status(404).json({ success: false, message: 'Room not found' });
+    }
+    if (room.hostelId) {
+      await assertOwnsHostel(req, room.hostelId);
     }
 
     const imageUrls = await uploadMultipleImagesToS3(files, 'rooms');
@@ -585,7 +624,7 @@ exports.uploadRoomImages = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -598,6 +637,9 @@ exports.deleteRoomImage = async (req, res) => {
     const room = await Room.findById(roomId);
     if (!room) {
       return res.status(404).json({ success: false, message: 'Room not found' });
+    }
+    if (room.hostelId) {
+      await assertOwnsHostel(req, room.hostelId);
     }
 
     room.images = room.images.filter(img => img !== decodedImageUrl);
@@ -617,7 +659,7 @@ exports.deleteRoomImage = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -631,6 +673,9 @@ exports.setRoomCoverImage = async (req, res) => {
     if (!room) {
       return res.status(404).json({ success: false, message: 'Room not found' });
     }
+    if (room.hostelId) {
+      await assertOwnsHostel(req, room.hostelId);
+    }
 
     if (!room.images.includes(imageUrl)) {
       return res.status(400).json({ success: false, message: 'Image not found in room images' });
@@ -641,7 +686,7 @@ exports.setRoomCoverImage = async (req, res) => {
 
     res.status(200).json({ success: true, data: room });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -650,10 +695,14 @@ exports.setRoomCoverImage = async (req, res) => {
 // Create Amenity
 exports.createAmenity = async (req, res) => {
   try {
+    if (!req.body.hostelId) {
+      return res.status(400).json({ success: false, message: 'Hostel ID is required' });
+    }
+    await assertOwnsHostel(req, req.body.hostelId);
     const amenity = await Amenity.create(req.body);
     res.status(201).json({ success: true, data: amenity });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -663,14 +712,19 @@ exports.getAmenities = async (req, res) => {
     const { hostelId, category, isAvailable } = req.query;
     const filter = {};
 
-    if (hostelId) filter.hostelId = hostelId;
+    // Security: scope amenities to owner's hostels
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
+    }
+    filter.hostelId = { $in: scopedHostelIds };
     if (category) filter.category = category;
     if (isAvailable !== undefined) filter.isAvailable = isAvailable === 'true';
 
     const amenities = await Amenity.find(filter).populate('hostelId', 'name');
     res.status(200).json({ success: true, count: amenities.length, data: amenities });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -681,25 +735,35 @@ exports.getAmenity = async (req, res) => {
     if (!amenity) {
       return res.status(404).json({ success: false, message: 'Amenity not found' });
     }
+    if (amenity.hostelId) {
+      await assertOwnsHostel(req, amenity.hostelId._id || amenity.hostelId);
+    }
     res.status(200).json({ success: true, data: amenity });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 // Update Amenity
 exports.updateAmenity = async (req, res) => {
   try {
+    const existing = await Amenity.findById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Amenity not found' });
+    }
+    if (existing.hostelId) {
+      await assertOwnsHostel(req, existing.hostelId);
+    }
+    if (req.body.hostelId) {
+      await assertOwnsHostel(req, req.body.hostelId);
+    }
     const amenity = await Amenity.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true,
     }).populate('hostelId', 'name');
-    if (!amenity) {
-      return res.status(404).json({ success: false, message: 'Amenity not found' });
-    }
     res.status(200).json({ success: true, data: amenity });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -709,6 +773,9 @@ exports.deleteAmenity = async (req, res) => {
     const amenity = await Amenity.findById(req.params.id);
     if (!amenity) {
       return res.status(404).json({ success: false, message: 'Amenity not found' });
+    }
+    if (amenity.hostelId) {
+      await assertOwnsHostel(req, amenity.hostelId);
     }
 
     // Delete images from S3
@@ -725,7 +792,7 @@ exports.deleteAmenity = async (req, res) => {
     await Amenity.findByIdAndDelete(req.params.id);
     res.status(200).json({ success: true, message: 'Amenity deleted successfully' });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -743,6 +810,9 @@ exports.uploadAmenityImages = async (req, res) => {
     if (!amenity) {
       return res.status(404).json({ success: false, message: 'Amenity not found' });
     }
+    if (amenity.hostelId) {
+      await assertOwnsHostel(req, amenity.hostelId);
+    }
 
     const imageUrls = await uploadMultipleImagesToS3(files, 'amenities');
     amenity.images = [...(amenity.images || []), ...imageUrls];
@@ -755,7 +825,7 @@ exports.uploadAmenityImages = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -768,6 +838,9 @@ exports.deleteAmenityImage = async (req, res) => {
     const amenity = await Amenity.findById(amenityId);
     if (!amenity) {
       return res.status(404).json({ success: false, message: 'Amenity not found' });
+    }
+    if (amenity.hostelId) {
+      await assertOwnsHostel(req, amenity.hostelId);
     }
 
     amenity.images = amenity.images.filter(img => img !== decodedImageUrl);
@@ -782,7 +855,7 @@ exports.deleteAmenityImage = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -797,6 +870,7 @@ exports.createRule = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Hostel ID is required' });
     }
 
+    await assertOwnsHostel(req, hostelId);
     const hostel = await Hostel.findById(hostelId);
     if (!hostel) {
       return res.status(404).json({ success: false, message: 'Hostel not found' });
@@ -816,20 +890,20 @@ exports.createRule = async (req, res) => {
 
     res.status(201).json({ success: true, data: ruleResponse });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 // Get Rules (Fetches from Hostels)
 exports.getRules = async (req, res) => {
   try {
-    const filter = {};
     const hostelId = req.params.hostelId || req.query.hostelId;
-    if (hostelId) {
-      filter._id = hostelId;
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
     }
 
-    const hostels = await Hostel.find(filter).select('name type address rules');
+    const hostels = await Hostel.find({ _id: { $in: scopedHostelIds } }).select('name type address rules');
 
     // Map hostels to rule objects
     const rules = hostels
@@ -843,7 +917,7 @@ exports.getRules = async (req, res) => {
 
     res.status(200).json({ success: true, count: rules.length, data: rules });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -854,6 +928,7 @@ exports.updateRule = async (req, res) => {
     const hostelId = req.params.id;
     const ruleData = req.body;
 
+    await assertOwnsHostel(req, hostelId);
     const hostel = await Hostel.findById(hostelId);
     if (!hostel) {
       return res.status(404).json({ success: false, message: 'Hostel not found' });
@@ -874,7 +949,7 @@ exports.updateRule = async (req, res) => {
 
     res.status(200).json({ success: true, data: ruleResponse });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -882,6 +957,7 @@ exports.updateRule = async (req, res) => {
 exports.deleteRule = async (req, res) => {
   try {
     const hostelId = req.params.id;
+    await assertOwnsHostel(req, hostelId);
     const hostel = await Hostel.findById(hostelId);
 
     if (!hostel) {
@@ -904,7 +980,7 @@ exports.deleteRule = async (req, res) => {
 
     res.status(200).json({ success: true, message: 'Rules reset successfully' });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -965,6 +1041,21 @@ exports.createUser = async (req, res) => {
       userData.currentRole = userData.role[0];
     }
 
+    // Security: Validate hostelId for owner
+    if (req.user?.role === 'owner') {
+      if (!userData.hostelId) {
+        const ownerHostelIds = await getOwnerHostelIds(req);
+        if (ownerHostelIds.length === 1) {
+          userData.hostelId = ownerHostelIds[0];
+        } else if (ownerHostelIds.length === 0) {
+          return res.status(400).json({ success: false, message: 'You do not own any hostels yet. Please create a hostel first.' });
+        } else {
+          return res.status(400).json({ success: false, message: 'hostelId is required' });
+        }
+      }
+      await assertOwnsHostel(req, userData.hostelId);
+    }
+
     // Save original password before it gets hashed (for email)
     const originalPassword = userData.password;
 
@@ -1019,7 +1110,7 @@ exports.createUser = async (req, res) => {
 
     res.status(201).json({ success: true, data: userResponse });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1028,11 +1119,18 @@ exports.getUsers = async (req, res) => {
   try {
     const { role, hostelId, status } = req.query;
     const filter = {};
+
+    // Security: ALWAYS scope to owner's own hostels only
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
+    }
+    filter.hostelId = { $in: scopedHostelIds };
+
     if (role) {
       const rolesArray = Array.isArray(role) ? role : [role];
       filter.$or = [{ role: { $in: rolesArray } }, { role: rolesArray[0] }, { roles: { $in: rolesArray } }];
     }
-    if (hostelId) filter.hostelId = hostelId;
     if (status) filter.status = status;
 
     const users = await User.find(filter)
@@ -1043,7 +1141,7 @@ exports.getUsers = async (req, res) => {
       .select('-password');
     res.status(200).json({ success: true, count: users.length, data: users });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1059,9 +1157,16 @@ exports.getUser = async (req, res) => {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
+    // Security: owner can only view users of their own hostels
+    if (user.hostelId) {
+      const userHostelId = user.hostelId?._id || user.hostelId;
+      await assertOwnsHostel(req, userHostelId);
+    } else if (req.user?.role === 'owner') {
+      return res.status(403).json({ success: false, message: 'Not authorized to access this user' });
+    }
     res.status(200).json({ success: true, data: user });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1070,6 +1175,19 @@ exports.updateUser = async (req, res) => {
   try {
     const updateData = { ...req.body };
     const userId = req.params.id;
+
+    const existingUser = await User.findById(userId);
+    if (!existingUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    if (existingUser.hostelId) {
+      await assertOwnsHostel(req, existingUser.hostelId);
+    } else if (req.user?.role === 'owner') {
+      return res.status(403).json({ success: false, message: 'Not authorized to modify this user' });
+    }
+    if (updateData.hostelId) {
+      await assertOwnsHostel(req, updateData.hostelId);
+    }
 
     if (updateData.password !== undefined && (updateData.password === '' || updateData.password == null)) {
       delete updateData.password;
@@ -1111,27 +1229,39 @@ exports.updateUser = async (req, res) => {
       { new: true, runValidators: true }
     ).select('-password');
 
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
     const userObj = user.toObject ? user.toObject() : user;
     res.status(200).json({ success: true, data: userObj });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 // Delete User
 exports.deleteUser = async (req, res) => {
   try {
-    const user = await User.findByIdAndDelete(req.params.id);
+    // Security: only allow deleting users that belong to owner's hostels
+    const user = await User.findById(req.params.id);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
+    if (user.hostelId) {
+      await assertOwnsHostel(req, user.hostelId);
+    } else if (req.user?.role === 'owner') {
+      return res.status(403).json({ success: false, message: 'Not authorized to delete this user' });
+    }
+
+    // Clean up room occupancy if deleting a student assigned to a room
+    if (user.roomId) {
+      await Room.findByIdAndUpdate(user.roomId, {
+        $pull: { students: user._id },
+        $inc: { currentOccupancy: -1 },
+      }).catch((err) => console.warn('Room occupancy cleanup on user delete:', err.message));
+    }
+
+    await User.findByIdAndDelete(req.params.id);
     res.status(200).json({ success: true, message: 'User deleted' });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1141,9 +1271,15 @@ exports.deleteUser = async (req, res) => {
 exports.getStudentsByStatus = async (req, res) => {
   try {
     const { status } = req.params;
+    // Security: scope to owner's hostels only
+    const scopedHostelIds = await getScopedHostelIds(req);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
+    }
     const students = await User.find({
-      role: { $in: ['student'] }, // Support both array and single role
-      status
+      role: { $in: ['student'] },
+      status,
+      hostelId: { $in: scopedHostelIds }, // CRITICAL security filter
     })
       .populate('hostelId')
       .populate('blockId')
@@ -1152,7 +1288,7 @@ exports.getStudentsByStatus = async (req, res) => {
       .select('-password');
     res.status(200).json({ success: true, count: students.length, data: students });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1162,8 +1298,11 @@ exports.getStudentsByStatus = async (req, res) => {
 exports.getAttendanceTrends = async (req, res) => {
   try {
     const { hostelId, startDate, endDate } = req.query;
-    const filter = {};
-    if (hostelId) filter.hostelId = hostelId;
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, data: { total: 0, inside: 0, outside: 0, pending: 0 } });
+    }
+    const filter = { hostelId: { $in: scopedHostelIds } };
     if (startDate || endDate) {
       filter.date = {};
       if (startDate) filter.date.$gte = new Date(startDate);
@@ -1179,7 +1318,7 @@ exports.getAttendanceTrends = async (req, res) => {
     };
     res.status(200).json({ success: true, data: trends });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1187,18 +1326,16 @@ exports.getAttendanceTrends = async (req, res) => {
 exports.getRecentViolations = async (req, res) => {
   try {
     const { hostelId, from, to } = req.query;
-    const targetHostelId = hostelId || req.user?.hostelId;
-    let studentIds = [];
-    if (targetHostelId) {
-      const students = await User.find({ hostelId: targetHostelId, role: 'student' }).select('_id');
-      studentIds = students.map((s) => s._id);
-    } else if (req.user?.id) {
-      const hostels = await Hostel.find({ ownerId: req.user.id }).select('_id');
-      const hostelIds = hostels.map((h) => h._id);
-      const students = await User.find({ hostelId: { $in: hostelIds }, role: 'student' }).select('_id');
-      studentIds = students.map((s) => s._id);
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
     }
-    const filter = studentIds.length ? { studentId: { $in: studentIds } } : {};
+    const students = await User.find({ hostelId: { $in: scopedHostelIds }, role: 'student' }).select('_id');
+    const studentIds = students.map((s) => s._id);
+    if (studentIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+    const filter = { studentId: { $in: studentIds } };
     if (from || to) {
       filter.createdAt = {};
       if (from) {
@@ -1220,7 +1357,7 @@ exports.getRecentViolations = async (req, res) => {
       .lean();
     res.status(200).json({ success: true, data: violations });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1228,11 +1365,16 @@ exports.getRecentViolations = async (req, res) => {
 exports.getViolationHeatmap = async (req, res) => {
   try {
     const { hostelId, startDate, endDate } = req.query;
-    const filter = {};
-    if (hostelId) {
-      const students = await User.find({ hostelId, role: 'student' }).select('_id');
-      filter.studentId = { $in: students.map(s => s._id) };
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, data: {} });
     }
+    const students = await User.find({ hostelId: { $in: scopedHostelIds }, role: 'student' }).select('_id');
+    const studentIds = students.map(s => s._id);
+    if (studentIds.length === 0) {
+      return res.status(200).json({ success: true, data: {} });
+    }
+    const filter = { studentId: { $in: studentIds } };
     if (startDate || endDate) {
       filter.createdAt = {};
       if (startDate) filter.createdAt.$gte = new Date(startDate);
@@ -1251,7 +1393,7 @@ exports.getViolationHeatmap = async (req, res) => {
 
     res.status(200).json({ success: true, data: heatmap });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1259,17 +1401,29 @@ exports.getViolationHeatmap = async (req, res) => {
 exports.getMonthlyDisciplineReport = async (req, res) => {
   try {
     const { hostelId, month, year } = req.query;
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          violations: 0,
+          complaints: 0,
+          violationsList: [],
+          complaintsList: [],
+        },
+      });
+    }
     const startDate = new Date(year || new Date().getFullYear(), (month || new Date().getMonth()) - 1, 1);
     const endDate = new Date(year || new Date().getFullYear(), month || new Date().getMonth(), 0);
 
-    const filter = { createdAt: { $gte: startDate, $lte: endDate } };
-    if (hostelId) {
-      const students = await User.find({ hostelId, role: 'student' }).select('_id');
-      filter.studentId = { $in: students.map(s => s._id) };
-    }
+    const students = await User.find({ hostelId: { $in: scopedHostelIds }, role: 'student' }).select('_id');
+    const studentIds = students.map(s => s._id);
 
-    const violations = await Violation.find(filter).populate('studentId', 'name');
-    const complaints = await Complaint.find(filter).populate('raisedBy', 'name');
+    const violationFilter = { createdAt: { $gte: startDate, $lte: endDate }, studentId: { $in: studentIds } };
+    const complaintFilter = { createdAt: { $gte: startDate, $lte: endDate }, hostelId: { $in: scopedHostelIds } };
+
+    const violations = studentIds.length > 0 ? await Violation.find(violationFilter).populate('studentId', 'name') : [];
+    const complaints = await Complaint.find(complaintFilter).populate('raisedBy', 'name');
 
     res.status(200).json({
       success: true,
@@ -1281,7 +1435,7 @@ exports.getMonthlyDisciplineReport = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1294,6 +1448,7 @@ exports.sendNotification = async (req, res) => {
     const { title, message, type, targetAudience, recipients, priority, expiresAt, sendEmail } = req.body;
     const hostelId = req.body.hostelId;
 
+    await assertOwnsHostel(req, hostelId);
     // Get hostel info
     const hostel = await Hostel.findById(hostelId);
     if (!hostel) {
@@ -1435,7 +1590,7 @@ exports.sendNotification = async (req, res) => {
       pushSent,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1443,6 +1598,7 @@ exports.sendNotification = async (req, res) => {
 exports.getNotifications = async (req, res) => {
   try {
     const { hostelId } = req.params;
+    await assertOwnsHostel(req, hostelId);
     const { type, priority, targetAudience, page = 1, limit = 50 } = req.query;
 
     const query = { hostelId };
@@ -1477,7 +1633,7 @@ exports.getNotifications = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1493,9 +1649,14 @@ exports.getNotification = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Notification not found' });
     }
 
+    if (notification.hostelId) {
+      const hId = notification.hostelId?._id || notification.hostelId;
+      await assertOwnsHostel(req, hId);
+    }
+
     res.status(200).json({ success: true, data: notification });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1508,6 +1669,9 @@ exports.sendNotificationReminder = async (req, res) => {
     }
     if (notification.createdBy.toString() !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Not authorized to send reminder for this notification' });
+    }
+    if (notification.hostelId) {
+      await assertOwnsHostel(req, notification.hostelId);
     }
 
     const hostelId = notification.hostelId?.toString ? notification.hostelId.toString() : notification.hostelId;
@@ -1593,7 +1757,7 @@ exports.sendNotificationReminder = async (req, res) => {
     res.status(200).json({ success: true, pushSent });
   } catch (error) {
     console.error('[Notice Reminder] Error:', error.message);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1611,6 +1775,9 @@ exports.updateNotification = async (req, res) => {
     if (notification.createdBy.toString() !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Not authorized to update this notification' });
     }
+    if (notification.hostelId) {
+      await assertOwnsHostel(req, notification.hostelId);
+    }
 
     if (title) notification.title = title;
     if (message) notification.message = message;
@@ -1622,7 +1789,7 @@ exports.updateNotification = async (req, res) => {
 
     res.status(200).json({ success: true, data: notification });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1638,18 +1805,22 @@ exports.deleteNotification = async (req, res) => {
     if (notification.createdBy.toString() !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Not authorized to delete this notification' });
     }
+    if (notification.hostelId) {
+      await assertOwnsHostel(req, notification.hostelId);
+    }
 
     await notification.deleteOne();
 
     res.status(200).json({ success: true, message: 'Notification deleted successfully' });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 
 exports.updateHostelAmenities = async (req, res) => {
   try {
+    await assertOwnsHostel(req, req.params.id);
     const hostel = await Hostel.findByIdAndUpdate(
       req.params.id,
       { amenities: req.body.amenities },
@@ -1660,84 +1831,111 @@ exports.updateHostelAmenities = async (req, res) => {
     }
     res.status(200).json({ success: true, data: hostel });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
-
 
 exports.setRoomPricing = async (req, res) => {
   try {
     const { roomId, category, pricing } = req.body;
-    const room = await Room.findByIdAndUpdate(
-      roomId,
-      { category, pricing },
-      { new: true, runValidators: true }
-    );
+    const room = await Room.findById(roomId);
     if (!room) {
       return res.status(404).json({ success: false, message: 'Room not found' });
     }
+    await assertOwnsHostel(req, room.hostelId);
+    room.category = category;
+    room.pricing = pricing;
+    await room.save();
     res.status(200).json({ success: true, data: room });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.bulkUpdateRoomPricing = async (req, res) => {
   try {
     const { roomIds, category, pricing } = req.body;
-    const rooms = await Room.updateMany(
+    const rooms = await Room.find({ _id: { $in: roomIds } });
+    for (const r of rooms) {
+      await assertOwnsHostel(req, r.hostelId);
+    }
+    const updateResult = await Room.updateMany(
       { _id: { $in: roomIds } },
       { category, pricing },
       { new: true }
     );
-    res.status(200).json({ success: true, data: rooms });
+    res.status(200).json({ success: true, data: updateResult });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.autoAllocateRooms = async (req, res) => {
   try {
-    const { studentIds, preferences } = req.body;
-    const students = await User.find({ _id: { $in: studentIds }, role: 'student' });
+    const { studentIds, preferences, hostelId } = req.body;
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'No authorized hostels found' });
+    }
+    const students = await User.find({ _id: { $in: studentIds }, role: 'student', hostelId: { $in: scopedHostelIds } });
     const availableRooms = await Room.find({
-      status: 'available',
-      currentOccupancy: { $lt: { $expr: '$capacity' } },
+      hostelId: { $in: scopedHostelIds },
+      status: { $ne: 'maintenance' },
+      $expr: { $lt: ['$currentOccupancy', '$capacity'] },
     }).sort({ category: 1, roomNumber: 1 });
 
     const allocations = [];
     let roomIndex = 0;
 
     for (const student of students) {
-      if (roomIndex >= availableRooms.length) break;
+      while (roomIndex < availableRooms.length) {
+        const targetRoom = availableRooms[roomIndex];
+        // Atomic update with capacity guard to prevent race condition overbooking
+        const updatedRoom = await Room.findOneAndUpdate(
+          {
+            _id: targetRoom._id,
+            status: { $ne: 'maintenance' },
+            $expr: { $lt: ['$currentOccupancy', '$capacity'] },
+          },
+          {
+            $push: { students: student._id },
+            $inc: { currentOccupancy: 1 },
+          },
+          { new: true }
+        );
 
-      const room = availableRooms[roomIndex];
-      if (room.currentOccupancy < room.capacity) {
-        room.students.push(student._id);
-        room.currentOccupancy += 1;
-        if (room.currentOccupancy >= room.capacity) {
-          room.status = 'occupied';
+        if (updatedRoom) {
+          if (updatedRoom.currentOccupancy >= updatedRoom.capacity && updatedRoom.status !== 'occupied') {
+            await Room.findByIdAndUpdate(updatedRoom._id, { $set: { status: 'occupied' } });
+          }
+          await User.findByIdAndUpdate(student._id, { $set: { roomId: updatedRoom._id } });
+          allocations.push({ studentId: student._id, roomId: updatedRoom._id });
+
+          // If this room has now reached capacity, advance to the next room
+          if (updatedRoom.currentOccupancy >= updatedRoom.capacity) {
+            roomIndex++;
+          }
+          break;
+        } else {
+          // Room was filled by another process, advance to next room
+          roomIndex++;
         }
-        await room.save();
-
-        student.roomId = room._id;
-        await student.save();
-
-        allocations.push({ studentId: student._id, roomId: room._id });
       }
-      roomIndex++;
+      if (roomIndex >= availableRooms.length) {
+        break; // No more available capacity
+      }
     }
 
-    res.status(200).json({ success: true, data: allocations });
+    res.status(200).json({ success: true, count: allocations.length, data: allocations });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
-
 
 exports.createCurfewRule = async (req, res) => {
   try {
     const { hostelId, weekday, weekend, specialDays } = req.body;
+    await assertOwnsHostel(req, hostelId);
     const rule = await Rule.create({
       hostelId,
       ruleType: 'curfew',
@@ -1746,13 +1944,14 @@ exports.createCurfewRule = async (req, res) => {
     });
     res.status(201).json({ success: true, data: rule });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.createLateEntryRule = async (req, res) => {
   try {
     const { hostelId, allowedTimes, fineAmount, maxViolations, escalationAfter } = req.body;
+    await assertOwnsHostel(req, hostelId);
     const rule = await Rule.create({
       hostelId,
       ruleType: 'late-entry',
@@ -1761,13 +1960,14 @@ exports.createLateEntryRule = async (req, res) => {
     });
     res.status(201).json({ success: true, data: rule });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.createLeavePolicy = async (req, res) => {
   try {
     const { hostelId, maxLeaveDays, maxConsecutiveDays, requireParentApproval, autoExpiry, expiryDays } = req.body;
+    await assertOwnsHostel(req, hostelId);
     const rule = await Rule.create({
       hostelId,
       ruleType: 'leave',
@@ -1776,13 +1976,14 @@ exports.createLeavePolicy = async (req, res) => {
     });
     res.status(201).json({ success: true, data: rule });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.createDisciplineMatrix = async (req, res) => {
   try {
     const { hostelId, violationType, actions } = req.body;
+    await assertOwnsHostel(req, hostelId);
     const rule = await Rule.create({
       hostelId,
       ruleType: 'discipline',
@@ -1791,16 +1992,22 @@ exports.createDisciplineMatrix = async (req, res) => {
     });
     res.status(201).json({ success: true, data: rule });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
-
 
 exports.createGeoFence = async (req, res) => {
   try {
     const { hostelId, name, type, polygon, bounds, center, radius, isActive } = req.body;
     if (!hostelId || !name || !type) {
       return res.status(400).json({ success: false, message: 'hostelId, name and type are required' });
+    }
+    await assertOwnsHostel(req, hostelId);
+
+    // Issue 24: Validate geometry parameters rigorously
+    const geomValidation = validateGeoFenceConfig(type, { center, radius, polygon, bounds });
+    if (!geomValidation.valid) {
+      return res.status(400).json({ success: false, message: geomValidation.error });
     }
 
     // Build payload for the single active boundary; clear other-type fields so only one shape is stored
@@ -1809,23 +2016,19 @@ exports.createGeoFence = async (req, res) => {
       name,
       type,
       isActive: isActive !== false,
+      ...geomValidation.normalized,
     };
     const unsetPayload = {};
-    if (type === 'polygon' && Array.isArray(polygon) && polygon.length >= 3) {
-      const normalized = polygon.map((p) => ({
-        latitude: Number(p.latitude),
-        longitude: Number(p.longitude),
-      }));
-      setPayload.polygon = normalized;
+    if (type === 'polygon') {
       unsetPayload.bounds = '';
       unsetPayload.center = '';
       unsetPayload.radius = '';
 
       // Sync hostel location to center of boundary (centroid of polygon)
-      const sumLat = normalized.reduce((s, p) => s + p.latitude, 0);
-      const sumLng = normalized.reduce((s, p) => s + p.longitude, 0);
-      const centroidLat = sumLat / normalized.length;
-      const centroidLng = sumLng / normalized.length;
+      const sumLat = setPayload.polygon.reduce((s, p) => s + p.latitude, 0);
+      const sumLng = setPayload.polygon.reduce((s, p) => s + p.longitude, 0);
+      const centroidLat = sumLat / setPayload.polygon.length;
+      const centroidLng = sumLng / setPayload.polygon.length;
       await Hostel.findByIdAndUpdate(hostelId, {
         $set: {
           'address.coordinates': {
@@ -1834,27 +2037,39 @@ exports.createGeoFence = async (req, res) => {
           },
         },
       });
-    } else if (type === 'rectangle' && bounds && typeof bounds.north === 'number' && typeof bounds.south === 'number' && typeof bounds.east === 'number' && typeof bounds.west === 'number') {
-      setPayload.bounds = {
-        north: bounds.north,
-        south: bounds.south,
-        east: bounds.east,
-        west: bounds.west,
-      };
+    } else if (type === 'rectangle') {
       unsetPayload.polygon = '';
       unsetPayload.center = '';
       unsetPayload.radius = '';
-    } else if (type === 'circle' && center && typeof center.latitude === 'number' && typeof center.longitude === 'number' && typeof radius === 'number') {
-      setPayload.center = { latitude: center.latitude, longitude: center.longitude };
-      setPayload.radius = radius;
+
+      const centroidLat = (setPayload.bounds.north + setPayload.bounds.south) / 2;
+      const centroidLng = (setPayload.bounds.east + setPayload.bounds.west) / 2;
+      await Hostel.findByIdAndUpdate(hostelId, {
+        $set: {
+          'address.coordinates': {
+            latitude: centroidLat,
+            longitude: centroidLng,
+          },
+        },
+      });
+    } else if (type === 'circle') {
       unsetPayload.polygon = '';
       unsetPayload.bounds = '';
-    } else {
-      return res.status(400).json({ success: false, message: 'Invalid boundary data for type: ' + type });
+
+      await Hostel.findByIdAndUpdate(hostelId, {
+        $set: {
+          'address.coordinates': {
+            latitude: setPayload.center.latitude,
+            longitude: setPayload.center.longitude,
+          },
+        },
+      });
     }
 
-    // Ensure only one active geo-fence per hostel: deactivate all others
-    await GeoFence.updateMany({ hostelId }, { $set: { isActive: false } });
+    // Issue 25: Ensure only one active geo-fence per hostel: deactivate all others
+    if (setPayload.isActive) {
+      await GeoFence.updateMany({ hostelId }, { $set: { isActive: false } });
+    }
 
     const existing = await GeoFence.findOne({ hostelId });
     let geoFence;
@@ -1871,70 +2086,100 @@ exports.createGeoFence = async (req, res) => {
     geoFence = await GeoFence.create(setPayload);
     res.status(201).json({ success: true, data: geoFence });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.getGeoFences = async (req, res) => {
   try {
-    const hostelId = req.params.hostelId;
+    const hostelId = req.params.hostelId || req.query.hostelId;
+    if (!hostelId) {
+      return res.status(400).json({ success: false, message: 'Hostel ID is required' });
+    }
+    await assertOwnsHostel(req, hostelId);
     // Return only the current active boundary (one per hostel)
     const current = await GeoFence.findOne({ hostelId, isActive: true });
     const data = current ? [current] : [];
     res.status(200).json({ success: true, data });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.updateGeoFence = async (req, res) => {
   try {
+    const existing = await GeoFence.findById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Geo-fence not found' });
+    }
+    await assertOwnsHostel(req, existing.hostelId);
+
+    const type = req.body.type || existing.type;
+    // Issue 24: If geometry fields are being updated, validate them
+    if (req.body.type || req.body.center || req.body.radius || req.body.polygon || req.body.bounds) {
+      const geomValidation = validateGeoFenceConfig(type, {
+        center: req.body.center || existing.center,
+        radius: req.body.radius !== undefined ? req.body.radius : existing.radius,
+        polygon: req.body.polygon || existing.polygon,
+        bounds: req.body.bounds || existing.bounds,
+      });
+      if (!geomValidation.valid) {
+        return res.status(400).json({ success: false, message: geomValidation.error });
+      }
+      Object.assign(req.body, geomValidation.normalized);
+    }
+
+    // Issue 25: If activating this geofence, deactivate all others for this hostel
+    if (req.body.isActive === true) {
+      await GeoFence.updateMany({ hostelId: existing.hostelId, _id: { $ne: existing._id } }, { $set: { isActive: false } });
+    }
+
     const geoFence = await GeoFence.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true,
     });
-    if (!geoFence) {
-      return res.status(404).json({ success: false, message: 'Geo-fence not found' });
-    }
     res.status(200).json({ success: true, data: geoFence });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
-
 exports.createFeeStructure = async (req, res) => {
   try {
+    await assertOwnsHostel(req, req.body.hostelId);
     const feeStructure = await FeeStructure.create(req.body);
     res.status(201).json({ success: true, data: feeStructure });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.getFeeStructures = async (req, res) => {
   try {
+    await assertOwnsHostel(req, req.params.hostelId);
     const feeStructures = await FeeStructure.find({ hostelId: req.params.hostelId })
       .populate('roomIds', 'roomNumber category');
     res.status(200).json({ success: true, data: feeStructures });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 // Plans (1 / 3 / 6 / 12 month rent plans)
 exports.getPlans = async (req, res) => {
   try {
+    await assertOwnsHostel(req, req.params.hostelId);
     const plans = await Plan.find({ hostelId: req.params.hostelId }).sort({ durationMonths: 1 });
     res.status(200).json({ success: true, data: plans });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.seedPlans = async (req, res) => {
   try {
     const hostelId = req.params.hostelId;
+    await assertOwnsHostel(req, hostelId);
     const existing = await Plan.countDocuments({ hostelId });
     if (existing > 0) {
       return res.status(400).json({ success: false, message: 'Plans already exist for this hostel. Delete or edit them instead.' });
@@ -1948,21 +2193,23 @@ exports.seedPlans = async (req, res) => {
     const plans = await Plan.insertMany(defaults.map((p) => ({ ...p, hostelId })));
     res.status(201).json({ success: true, data: plans, message: 'Plans seeded (1, 3, 6, 12 month). Update amounts in the table.' });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.updatePlan = async (req, res) => {
   try {
-    const plan = await Plan.findByIdAndUpdate(
+    const plan = await Plan.findById(req.params.id);
+    if (!plan) return res.status(404).json({ success: false, message: 'Plan not found' });
+    await assertOwnsHostel(req, plan.hostelId);
+    const updated = await Plan.findByIdAndUpdate(
       req.params.id,
       req.body,
       { new: true, runValidators: true }
     );
-    if (!plan) return res.status(404).json({ success: false, message: 'Plan not found' });
-    res.status(200).json({ success: true, data: plan });
+    res.status(200).json({ success: true, data: updated });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -1970,6 +2217,7 @@ exports.updatePlan = async (req, res) => {
 exports.getApplicableFeeForStudent = async (req, res) => {
   try {
     const { hostelId, studentId } = req.params;
+    await assertOwnsHostel(req, hostelId);
     const { type } = req.query;
     const student = await User.findById(studentId).populate('roomId', 'category _id');
     if (!student || !student.hostelId || student.hostelId.toString() !== hostelId) {
@@ -2011,14 +2259,14 @@ exports.getApplicableFeeForStudent = async (req, res) => {
     }
     res.status(200).json({ success: true, data: result });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
-
 
 exports.createPayment = async (req, res) => {
   try {
     const body = { ...req.body };
+    await assertOwnsHostel(req, body.hostelId);
     if (body.planId) {
       const plan = await Plan.findById(body.planId).select('durationMonths').lean();
       if (plan && plan.durationMonths) {
@@ -2029,15 +2277,19 @@ exports.createPayment = async (req, res) => {
     const payment = await Payment.create(body);
     res.status(201).json({ success: true, data: payment });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.getPayments = async (req, res) => {
   try {
     const { hostelId, studentId, status, type } = req.query;
-    const filter = {};
-    if (hostelId) filter.hostelId = hostelId;
+    // Security: scope payments to owner's hostels only
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+    const filter = { hostelId: { $in: scopedHostelIds } };
     if (studentId) filter.studentId = studentId;
     if (status) filter.status = status;
     if (type) filter.type = type;
@@ -2058,7 +2310,7 @@ exports.getPayments = async (req, res) => {
     }
     res.status(200).json({ success: true, data: payments });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -2069,6 +2321,7 @@ exports.updatePaymentStatus = async (req, res) => {
     if (!payment) {
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
+    await assertOwnsHostel(req, payment.hostelId);
     payment.status = status;
     if (transactionId != null) payment.transactionId = transactionId;
     if (paymentMethod != null) payment.paymentMethod = paymentMethod;
@@ -2088,19 +2341,21 @@ exports.updatePaymentStatus = async (req, res) => {
       .lean();
     res.status(200).json({ success: true, data: updated || payment });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.deletePayment = async (req, res) => {
   try {
-    const payment = await Payment.findByIdAndDelete(req.params.id);
+    const payment = await Payment.findById(req.params.id);
     if (!payment) {
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
+    await assertOwnsHostel(req, payment.hostelId);
+    await Payment.findByIdAndDelete(req.params.id);
     res.status(200).json({ success: true, data: { _id: payment._id } });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -2110,6 +2365,7 @@ exports.generateInvoice = async (req, res) => {
     if (!payment) {
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
+    await assertOwnsHostel(req, payment.hostelId?._id || payment.hostelId);
 
     const invoiceId = `INV-${Date.now()}-${payment._id.toString().slice(-6)}`;
     payment.invoiceId = invoiceId;
@@ -2124,7 +2380,7 @@ exports.generateInvoice = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -2139,6 +2395,8 @@ exports.bulkUploadStudents = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No file uploaded' });
     }
 
+    await assertOwnsHostel(req, req.body.hostelId);
+
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
@@ -2146,6 +2404,7 @@ exports.bulkUploadStudents = async (req, res) => {
 
     const students = [];
     const errors = [];
+    const emailQueue = [];
 
     const hostel = await Hostel.findById(req.body.hostelId);
     const hostelName = hostel?.name || 'Hostel';
@@ -2158,23 +2417,26 @@ exports.bulkUploadStudents = async (req, res) => {
           name: row.name,
           email: row.email,
           password: tempPassword,
-          role: 'student',
+          role: ['student'],
+          currentRole: 'student',
           phone: row.phone,
           studentId: row.studentId,
           hostelId: req.body.hostelId,
           status: 'active',
         });
 
-        // Send welcome email
+        // Queue welcome email for non-blocking asynchronous delivery
         if (student.email) {
-          await sendWelcomeEmail(
-            student.email,
-            student.name,
-            hostelName,
-            {
-              email: student.email,
-              password: tempPassword,
-            }
+          emailQueue.push(
+            sendWelcomeEmail(
+              student.email,
+              student.name,
+              hostelName,
+              {
+                email: student.email,
+                password: tempPassword,
+              }
+            ).catch(err => console.error(`Bulk welcome email failed for ${student.email}:`, err.message))
           );
         }
 
@@ -2184,26 +2446,32 @@ exports.bulkUploadStudents = async (req, res) => {
       }
     }
 
+    // Trigger emails asynchronously without blocking the client response
+    if (emailQueue.length > 0) {
+      Promise.allSettled(emailQueue).then(() => {
+        console.log(`[BulkUpload] Finished sending ${emailQueue.length} welcome emails.`);
+      });
+    }
+
     res.status(201).json({
       success: true,
       data: { created: students.length, students, errors },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.approveStudentOnboarding = async (req, res) => {
   try {
-    const student = await User.findByIdAndUpdate(
-      req.params.id,
-      { status: 'active' },
-      { new: true }
-    ).populate('hostelId');
-
+    const student = await User.findById(req.params.id).populate('hostelId');
     if (!student) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
+    await assertOwnsHostel(req, student.hostelId?._id || student.hostelId);
+
+    student.status = 'active';
+    await student.save();
 
     // Send approval email
     if (student.email) {
@@ -2213,7 +2481,7 @@ exports.approveStudentOnboarding = async (req, res) => {
 
     res.status(200).json({ success: true, data: student });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -2226,6 +2494,7 @@ exports.resendWelcomeEmail = async (req, res) => {
     if (!student) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
+    await assertOwnsHostel(req, student.hostelId);
 
     if (student.role !== 'student') {
       return res.status(400).json({ success: false, message: 'User is not a student' });
@@ -2243,16 +2512,14 @@ exports.resendWelcomeEmail = async (req, res) => {
     const hostel = await Hostel.findById(student.hostelId);
     const hostelName = hostel ? hostel.name : 'Hostel';
 
-    // Send welcome email with new password
-    await sendWelcomeEmail(
-      student.email,
-      student.name,
+    // Send welcome email with new password (force: true bypasses duplicate check for explicit resend)
+    await sendWelcomeEmail({
+      user: student,
+      temporaryPassword: tempPassword,
+      loginId: student.studentId || student.email,
       hostelName,
-      {
-        email: student.email,
-        password: tempPassword,
-      }
-    );
+      force: true,
+    });
 
     res.status(200).json({
       success: true,
@@ -2260,7 +2527,7 @@ exports.resendWelcomeEmail = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in resendWelcomeEmail:', error);
-    res.status(500).json({ success: false, message: error.message || 'Failed to resend welcome email' });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Failed to resend welcome email' });
   }
 };
 
@@ -2278,6 +2545,7 @@ exports.uploadStudentProfileImage = async (req, res) => {
     if (!student) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
+    await assertOwnsHostel(req, student.hostelId);
 
     const imageUrl = await uploadImageToS3(file, 'students/profile');
     student.profileImage = imageUrl;
@@ -2290,7 +2558,7 @@ exports.uploadStudentProfileImage = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -2308,6 +2576,7 @@ exports.uploadStudentDocuments = async (req, res) => {
     if (!student) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
+    await assertOwnsHostel(req, student.hostelId);
 
     const documentData = req.body.documents || []; // Array of {type, name} objects
     const uploadedDocuments = [];
@@ -2335,7 +2604,7 @@ exports.uploadStudentDocuments = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -2348,6 +2617,7 @@ exports.deleteStudentDocument = async (req, res) => {
     if (!student) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
+    await assertOwnsHostel(req, student.hostelId);
 
     const document = student.documents?.id(documentId);
     if (!document) {
@@ -2370,50 +2640,51 @@ exports.deleteStudentDocument = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.updateStudentStatus = async (req, res) => {
   try {
     const { status } = req.body;
-    const student = await User.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true }
-    );
+    const student = await User.findById(req.params.id);
     if (!student) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
+    await assertOwnsHostel(req, student.hostelId);
+    student.status = status;
+    await student.save();
     res.status(200).json({ success: true, data: student });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
-
 exports.createTemplate = async (req, res) => {
   try {
+    await assertOwnsHostel(req, req.body.hostelId);
     const template = await Template.create(req.body);
     res.status(201).json({ success: true, data: template });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.getTemplates = async (req, res) => {
   try {
+    await assertOwnsHostel(req, req.params.hostelId);
     const templates = await Template.find({ hostelId: req.params.hostelId });
     res.status(200).json({ success: true, data: templates });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
-
 exports.sendBroadcast = async (req, res) => {
   try {
-    const { title, message, type, targetAudience, templateId, recipients } = req.body;
+    const { title, message, type, targetAudience, templateId, recipients, hostelId } = req.body;
+    const targetHostelId = hostelId || req.body.hostelId;
+    await assertOwnsHostel(req, targetHostelId);
 
     // If template is used, fetch and replace variables
     let finalMessage = message;
@@ -2434,10 +2705,10 @@ exports.sendBroadcast = async (req, res) => {
     let notificationRecipients = [];
 
     if (targetAudience === 'all') {
-      const users = await User.find({ hostelId: req.body.hostelId });
+      const users = await User.find({ hostelId: targetHostelId });
       notificationRecipients = users.map(u => u._id);
     } else if (targetAudience) {
-      const users = await User.find({ hostelId: req.body.hostelId, role: targetAudience });
+      const users = await User.find({ hostelId: targetHostelId, role: targetAudience });
       notificationRecipients = users.map(u => u._id);
     } else if (recipients) {
       notificationRecipients = recipients;
@@ -2445,17 +2716,17 @@ exports.sendBroadcast = async (req, res) => {
 
     const notification = await Notification.create({
       title,
-      message: finalMessage,
+      message,
       type,
       targetAudience,
       recipients: notificationRecipients,
       createdBy: req.user.id,
-      hostelId: req.body.hostelId,
+      hostelId: targetHostelId,
     });
 
     res.status(201).json({ success: true, data: notification });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -2464,10 +2735,16 @@ exports.sendBroadcast = async (req, res) => {
 // Get visitor requests for owner's hostels (students in owner's hostels)
 exports.getVisitorRequests = async (req, res) => {
   try {
-    const hostels = await Hostel.find({ ownerId: req.user.id }).select('_id');
-    const hostelIds = hostels.map(h => h._id);
-    const students = await User.find({ hostelId: { $in: hostelIds }, role: 'student' }).select('_id');
+    const { hostelId } = req.query;
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+    const students = await User.find({ hostelId: { $in: scopedHostelIds }, role: 'student' }).select('_id');
     const studentIds = students.map(s => s._id);
+    if (studentIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
 
     const visitors = await Visitor.find({ visitingStudentId: { $in: studentIds } })
       .populate('visitingStudentId', 'name roomId hostelId')
@@ -2476,7 +2753,7 @@ exports.getVisitorRequests = async (req, res) => {
 
     res.status(200).json({ success: true, data: visitors });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -2493,10 +2770,7 @@ exports.approveVisitorRequest = async (req, res) => {
     }
 
     const student = visitor.visitingStudentId;
-    const hostel = await Hostel.findById(student?.hostelId);
-    if (!hostel || hostel.ownerId.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Not authorized for this hostel' });
-    }
+    await assertOwnsHostel(req, student?.hostelId);
 
     visitor.status = 'approved';
     visitor.approvedBy = req.user.id;
@@ -2524,7 +2798,7 @@ exports.approveVisitorRequest = async (req, res) => {
 
     res.status(200).json({ success: true, data: visitor });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -2542,10 +2816,7 @@ exports.rejectVisitorRequest = async (req, res) => {
     }
 
     const student = visitor.visitingStudentId;
-    const hostel = await Hostel.findById(student?.hostelId);
-    if (!hostel || hostel.ownerId.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Not authorized for this hostel' });
-    }
+    await assertOwnsHostel(req, student?.hostelId);
 
     visitor.status = 'rejected';
     visitor.approvedBy = req.user.id;
@@ -2573,71 +2844,42 @@ exports.rejectVisitorRequest = async (req, res) => {
 
     res.status(200).json({ success: true, data: visitor });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.getDashboardKPIs = async (req, res) => {
   try {
     const { hostelId } = req.query;
-    const targetHostelId = hostelId || req.user?.hostelId;
-    const mongoose = require('mongoose');
-
-    const roomFilter = targetHostelId ? { hostelId: targetHostelId } : {};
-    const rooms = await Room.find(roomFilter);
-    const roomIds = rooms.map(r => r._id);
-    const hostelRoomIds = roomIds.map(id => id.toString());
-
-    // Find students by hostelId directly
-    const studentsByHostel = targetHostelId
-      ? await User.find({ hostelId: targetHostelId, role: 'student' })
-      : [];
-
-    // Find ALL students with roomId set (regardless of hostel)
-    // This ensures we catch students even if they're not linked through blocks
-    const allStudentsWithRooms = await User.find({
-      roomId: { $exists: true, $ne: null },
-      role: 'student'
-    });
-
-    // Filter students by rooms in this hostel (if hostelId provided)
-    const studentsByRoom = hostelRoomIds.length > 0
-      ? allStudentsWithRooms.filter(s =>
-        s.roomId && hostelRoomIds.includes(s.roomId.toString())
-      )
-      : allStudentsWithRooms.filter(s =>
-        s.roomId && roomIds.some(rid => rid.toString() === s.roomId.toString())
-      );
-
-    // Combine and deduplicate students
-    const studentIdSet = new Set();
-    studentsByHostel.forEach(s => studentIdSet.add(s._id.toString()));
-    studentsByRoom.forEach(s => studentIdSet.add(s._id.toString()));
-
-    // If no students found and we have rooms, get all students assigned to those rooms
-    if (studentIdSet.size === 0 && roomIds.length > 0) {
-      const fallbackStudents = await User.find({
-        roomId: { $in: roomIds },
-        role: 'student'
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          totalHostels: 0,
+          totalStudents: 0,
+          activeStudents: 0,
+          totalRooms: 0,
+          occupiedRooms: 0,
+          fullyOccupiedRooms: 0,
+          partiallyOccupiedRooms: 0,
+          emptyRooms: 0,
+          totalCapacity: 0,
+          totalOccupied: 0,
+          overallOccupancyRate: '0.00',
+          vacancyRate: '0.00',
+          totalRevenue: 0,
+          pendingPayments: 0,
+          totalViolations: 0,
+          pendingViolations: 0,
+        },
       });
-      fallbackStudents.forEach(s => studentIdSet.add(s._id.toString()));
     }
 
-    // If still no students, get all students with any roomId (for debugging)
-    if (studentIdSet.size === 0) {
-      const allStudentsWithAnyRoom = await User.find({
-        roomId: { $exists: true, $ne: null },
-        role: 'student'
-      });
-      allStudentsWithAnyRoom.forEach(s => studentIdSet.add(s._id.toString()));
-    }
+    const rooms = await Room.find({ hostelId: { $in: scopedHostelIds } });
+    const students = await User.find({ hostelId: { $in: scopedHostelIds }, role: 'student' });
+    const studentIds = students.map(s => s._id);
 
-    const allStudentIds = Array.from(studentIdSet).map(id => new mongoose.Types.ObjectId(id));
-    const students = allStudentIds.length > 0
-      ? await User.find({ _id: { $in: allStudentIds }, role: 'student' })
-      : [];
-
-    // Calculate occupancy with partial occupancy support
     let totalCapacity = 0;
     let totalOccupied = 0;
     let fullyOccupiedRooms = 0;
@@ -2650,7 +2892,6 @@ exports.getDashboardKPIs = async (req, res) => {
       );
       const studentCount = roomStudents.length;
       const capacity = room.capacity || 0;
-      const occupancy = capacity > 0 ? (studentCount / capacity) * 100 : 0;
 
       totalCapacity += capacity;
       totalOccupied += studentCount;
@@ -2667,25 +2908,24 @@ exports.getDashboardKPIs = async (req, res) => {
     const overallOccupancyRate = totalCapacity > 0
       ? ((totalOccupied / totalCapacity) * 100).toFixed(2)
       : '0.00';
-
-    // Calculate occupied rooms (rooms with at least 1 student)
     const occupiedRooms = fullyOccupiedRooms + partiallyOccupiedRooms;
 
-    const filter = targetHostelId ? { hostelId: targetHostelId } : {};
-    const payments = await Payment.find(filter);
-    const violations = await Violation.find({ studentId: { $in: students.map(s => s._id) } });
+    const payments = await Payment.find({ hostelId: { $in: scopedHostelIds } });
+    const violations = studentIds.length > 0
+      ? await Violation.find({ studentId: { $in: studentIds } })
+      : [];
 
     const kpis = {
       totalStudents: students.length,
       activeStudents: students.filter(s => s.status === 'active').length,
       totalRooms: rooms.length,
-      occupiedRooms: occupiedRooms,
-      fullyOccupiedRooms: fullyOccupiedRooms,
-      partiallyOccupiedRooms: partiallyOccupiedRooms,
-      emptyRooms: emptyRooms,
-      totalCapacity: totalCapacity,
-      totalOccupied: totalOccupied,
-      overallOccupancyRate: overallOccupancyRate,
+      occupiedRooms,
+      fullyOccupiedRooms,
+      partiallyOccupiedRooms,
+      emptyRooms,
+      totalCapacity,
+      totalOccupied,
+      overallOccupancyRate,
       vacancyRate: rooms.length > 0
         ? (((rooms.length - occupiedRooms) / rooms.length) * 100).toFixed(2)
         : '0.00',
@@ -2698,14 +2938,18 @@ exports.getDashboardKPIs = async (req, res) => {
     res.status(200).json({ success: true, data: kpis });
   } catch (error) {
     console.error('Error in getDashboardKPIs:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.getStaffPerformance = async (req, res) => {
   try {
     const { hostelId, startDate, endDate } = req.query;
-    const filter = { hostelId: hostelId || req.user.hostelId };
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+    const filter = { hostelId: { $in: scopedHostelIds } };
 
     if (startDate || endDate) {
       filter.createdAt = {};
@@ -2737,15 +2981,29 @@ exports.getStaffPerformance = async (req, res) => {
 
     res.status(200).json({ success: true, data: performance });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.getOccupancyReport = async (req, res) => {
   try {
     const { hostelId } = req.query;
-    const filter = {};
-    if (hostelId) filter.hostelId = hostelId;
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          totalRooms: 0,
+          occupiedRooms: 0,
+          availableRooms: 0,
+          maintenanceRooms: 0,
+          occupancyRate: '0.00',
+          byCategory: {},
+          vacantRooms: [],
+        },
+      });
+    }
+    const filter = { hostelId: { $in: scopedHostelIds } };
     const rooms = await Room.find(filter)
       .populate('students', 'name studentId');
 
@@ -2754,7 +3012,7 @@ exports.getOccupancyReport = async (req, res) => {
       occupiedRooms: rooms.filter(r => r.status === 'occupied').length,
       availableRooms: rooms.filter(r => r.status === 'available').length,
       maintenanceRooms: rooms.filter(r => r.status === 'maintenance').length,
-      occupancyRate: ((rooms.filter(r => r.status === 'occupied').length / rooms.length) * 100).toFixed(2),
+      occupancyRate: rooms.length > 0 ? ((rooms.filter(r => r.status === 'occupied').length / rooms.length) * 100).toFixed(2) : '0.00',
       byCategory: {},
       vacantRooms: rooms.filter(r => r.status === 'available').map(r => ({
         roomId: r._id,
@@ -2776,14 +3034,27 @@ exports.getOccupancyReport = async (req, res) => {
 
     res.status(200).json({ success: true, data: report });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.getFinancialReport = async (req, res) => {
   try {
     const { hostelId, startDate, endDate } = req.query;
-    const filter = { hostelId: hostelId || req.user.hostelId };
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          totalRevenue: 0,
+          pendingAmount: 0,
+          byType: {},
+          byMethod: {},
+          monthlyBreakdown: {},
+        },
+      });
+    }
+    const filter = { hostelId: { $in: scopedHostelIds } };
 
     if (startDate || endDate) {
       filter.createdAt = {};
@@ -2833,7 +3104,7 @@ exports.getFinancialReport = async (req, res) => {
 
     res.status(200).json({ success: true, data: report });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -2842,6 +3113,9 @@ exports.getAuditLogs = async (req, res) => {
   try {
     const { entityType, entityId, startDate, endDate } = req.query;
     const filter = {};
+    if (req.user?.role !== 'superadmin') {
+      filter.performedBy = req.user.id || req.user._id;
+    }
     if (entityType) filter.entityType = entityType;
     if (entityId) filter.entityId = entityId;
     if (startDate || endDate) {
@@ -2864,7 +3138,11 @@ exports.getAuditLogs = async (req, res) => {
 exports.exportData = async (req, res) => {
   try {
     const { type, format, hostelId } = req.query;
-    const filter = { hostelId: hostelId || req.user.hostelId };
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json([]);
+    }
+    const filter = { hostelId: { $in: scopedHostelIds } };
 
     let data = [];
     let filename = '';
@@ -2902,21 +3180,36 @@ exports.exportData = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid format' });
     }
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 function convertToCSV(data) {
   if (!data || data.length === 0) return '';
-  const headers = Object.keys(data[0].toObject ? data[0].toObject() : data[0]);
+  const firstItem = data[0].toObject ? data[0].toObject() : data[0];
+  const headers = Object.keys(firstItem);
+
+  const sanitizeCell = (val) => {
+    if (val === null || val === undefined) return '';
+    let str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    // Formula injection mitigation (OWASP)
+    if (/^[=+\-@\t\r]/.test(str)) {
+      str = `'${str}`;
+    }
+    // RFC 4180 escaping: if cell contains comma, quote, or newline, escape quotes and wrap in quotes
+    if (/[",\n\r]/.test(str)) {
+      str = `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  const headerRow = headers.map(sanitizeCell).join(',');
   const rows = data.map(item => {
     const obj = item.toObject ? item.toObject() : item;
-    return headers.map(header => {
-      const value = obj[header];
-      return typeof value === 'object' ? JSON.stringify(value) : value;
-    });
+    return headers.map(header => sanitizeCell(obj[header])).join(',');
   });
-  return [headers, ...rows].map(row => row.join(',')).join('\n');
+
+  return [headerRow, ...rows].join('\r\n');
 }
 
 
@@ -2948,9 +3241,11 @@ exports.getSupportTickets = async (req, res) => {
 
 exports.getSystemLogs = async (req, res) => {
   try {
-    // This would typically come from a logging service
-    // For now, return audit logs
-    const logs = await AuditLog.find()
+    const filter = {};
+    if (req.user?.role !== 'superadmin') {
+      filter.performedBy = req.user.id || req.user._id;
+    }
+    const logs = await AuditLog.find(filter)
       .populate('performedBy', 'name email')
       .sort({ timestamp: -1 })
       .limit(100);
@@ -3017,16 +3312,19 @@ exports.geocodeAddressEndpoint = async (req, res) => {
 exports.getEnquiries = async (req, res) => {
   try {
     const Enquiry = require('../models/Enquiry');
-    const hostels = await Hostel.find({ ownerId: req.user.id }).select('_id');
-    const hostelIds = hostels.map(h => h._id);
+    const { hostelId } = req.query;
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
+    }
 
-    const enquiries = await Enquiry.find({ hostelId: { $in: hostelIds } })
+    const enquiries = await Enquiry.find({ hostelId: { $in: scopedHostelIds } })
       .populate('hostelId', 'name')
       .sort({ createdAt: -1 });
 
     res.status(200).json({ success: true, count: enquiries.length, data: enquiries });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3041,11 +3339,7 @@ exports.updateEnquiryStatus = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Enquiry not found' });
     }
 
-    // Verify owner owns the hostel
-    const hostel = await Hostel.findById(enquiry.hostelId);
-    if (!hostel || hostel.ownerId.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Unauthorized' });
-    }
+    await assertOwnsHostel(req, enquiry.hostelId);
 
     enquiry.status = status || enquiry.status;
     if (notes) enquiry.notes = notes;
@@ -3056,7 +3350,7 @@ exports.updateEnquiryStatus = async (req, res) => {
     await enquiry.save();
     res.status(200).json({ success: true, data: enquiry });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3064,16 +3358,19 @@ exports.updateEnquiryStatus = async (req, res) => {
 exports.getCallbackRequests = async (req, res) => {
   try {
     const CallbackRequest = require('../models/CallbackRequest');
-    const hostels = await Hostel.find({ ownerId: req.user.id }).select('_id');
-    const hostelIds = hostels.map(h => h._id);
+    const { hostelId } = req.query;
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
+    }
 
-    const callbacks = await CallbackRequest.find({ hostelId: { $in: hostelIds } })
+    const callbacks = await CallbackRequest.find({ hostelId: { $in: scopedHostelIds } })
       .populate('hostelId', 'name')
       .sort({ createdAt: -1 });
 
     res.status(200).json({ success: true, count: callbacks.length, data: callbacks });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3088,11 +3385,7 @@ exports.updateCallbackStatus = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Callback request not found' });
     }
 
-    // Verify owner owns the hostel
-    const hostel = await Hostel.findById(callback.hostelId);
-    if (!hostel || hostel.ownerId.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Unauthorized' });
-    }
+    await assertOwnsHostel(req, callback.hostelId);
 
     callback.status = status || callback.status;
     if (notes) callback.notes = notes;
@@ -3103,7 +3396,7 @@ exports.updateCallbackStatus = async (req, res) => {
     await callback.save();
     res.status(200).json({ success: true, data: callback });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3111,16 +3404,12 @@ exports.updateCallbackStatus = async (req, res) => {
 exports.triggerAttendanceCheck = async (req, res) => {
   try {
     const { hostelId } = req.body;
+    await assertOwnsHostel(req, hostelId);
 
     // Get hostel details
     const hostel = await Hostel.findById(hostelId);
     if (!hostel) {
       return res.status(404).json({ success: false, message: 'Hostel not found' });
-    }
-
-    // Verify owner owns this hostel
-    if (hostel.ownerId.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Unauthorized' });
     }
 
     // Get all students in this hostel
@@ -3230,7 +3519,7 @@ exports.triggerAttendanceCheck = async (req, res) => {
     });
   } catch (error) {
     console.error('Error in triggerAttendanceCheck:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3238,14 +3527,18 @@ exports.triggerAttendanceCheck = async (req, res) => {
 exports.getStudentLocations = async (req, res) => {
   try {
     const { hostelId, status } = req.query;
-    const query = { role: 'student' };
-    if (hostelId) query.hostelId = hostelId;
+    // Security: scope to owner's hostels only
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+    const query = { role: 'student', hostelId: { $in: scopedHostelIds } };
     if (status) query.status = status;
 
     const students = await User.find(query).select('name email studentId currentLocation lastLocationUpdate locationPermissionStatus');
     res.status(200).json({ success: true, data: students });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3253,11 +3546,11 @@ exports.getStudentLocations = async (req, res) => {
 exports.getStudentsWithAttendance = async (req, res) => {
   try {
     const { hostelId } = req.query;
-    const hostels = await Hostel.find({ ownerId: req.user.id }).select('_id');
-    const hostelIds = hostels.map(h => h._id);
-    const query = { role: 'student' };
-    if (hostelId) query.hostelId = hostelId;
-    else if (hostelIds.length) query.hostelId = { $in: hostelIds };
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+    const query = { role: 'student', hostelId: { $in: scopedHostelIds } };
 
     const students = await User.find(query)
       .populate('hostelId', 'name')
@@ -3294,7 +3587,7 @@ exports.getStudentsWithAttendance = async (req, res) => {
 
     res.status(200).json({ success: true, data: list });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3302,12 +3595,11 @@ exports.getStudentsWithAttendance = async (req, res) => {
 exports.getDailyAttendance = async (req, res) => {
   try {
     const { hostelId, from, to } = req.query;
-    const hostels = await Hostel.find({ ownerId: req.user.id }).select('_id');
-    const hostelIds = hostels.map(h => h._id);
-    if (hostelIds.length === 0) {
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
       return res.status(200).json({ success: true, data: [] });
     }
-    const effectiveHostelId = hostelId || (hostelIds.length === 1 ? hostelIds[0] : null);
+    const effectiveHostelId = hostelId || (scopedHostelIds.length === 1 ? scopedHostelIds[0] : null);
     if (!effectiveHostelId) {
       return res.status(200).json({ success: true, data: [] });
     }
@@ -3386,7 +3678,7 @@ exports.getDailyAttendance = async (req, res) => {
 
     res.status(200).json({ success: true, data });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3404,12 +3696,11 @@ function formatMinutesToTime(minutes) {
 exports.getGateLogs = async (req, res) => {
   try {
     const { hostelId, from, to, studentId: studentIdParam } = req.query;
-    const hostels = await Hostel.find({ ownerId: req.user.id }).select('_id').lean();
-    const hostelIds = hostels.map((h) => h._id);
-    if (hostelIds.length === 0) {
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
       return res.status(200).json({ success: true, data: { events: [] } });
     }
-    const effectiveHostelId = hostelId || (hostelIds.length === 1 ? hostelIds[0] : null);
+    const effectiveHostelId = hostelId || (scopedHostelIds.length === 1 ? scopedHostelIds[0] : null);
     if (!effectiveHostelId) {
       return res.status(200).json({ success: true, data: { events: [] } });
     }
@@ -3451,7 +3742,7 @@ exports.getGateLogs = async (req, res) => {
 
     res.status(200).json({ success: true, data: { events } });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3459,8 +3750,15 @@ exports.getGateLogs = async (req, res) => {
 exports.getLocationPermissionStatus = async (req, res) => {
   try {
     const { hostelId } = req.query;
-    const query = { role: 'student' };
-    if (hostelId) query.hostelId = hostelId;
+    // Security: scope to owner's hostels only
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: { granted: [], denied: [], not_requested: [] },
+      });
+    }
+    const query = { role: 'student', hostelId: { $in: scopedHostelIds } };
 
     const students = await User.find(query).select('name studentId locationPermissionStatus');
 
@@ -3473,14 +3771,18 @@ exports.getLocationPermissionStatus = async (req, res) => {
 
     res.status(200).json({ success: true, data: grouped });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 // Send Notification to All Students (Expo when available for receipts, else FCM)
 exports.sendNotificationToAll = async (req, res) => {
   try {
-    const { title, body, data } = req.body;
+    const { title, body, data, hostelId } = req.body;
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'No authorized hostels found' });
+    }
     const User = require('../models/User');
     const {
       sendPushNotifications,
@@ -3490,6 +3792,7 @@ exports.sendNotificationToAll = async (req, res) => {
 
     const students = await User.find({
       role: 'student',
+      hostelId: { $in: scopedHostelIds },
       $or: [
         { pushToken: { $exists: true, $ne: null, $ne: '' } },
         { expoPushToken: { $exists: true, $ne: null, $ne: '' } },
@@ -3546,7 +3849,7 @@ exports.sendNotificationToAll = async (req, res) => {
     });
   } catch (error) {
     console.error('Broadcast notification error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3572,17 +3875,11 @@ const MessSchedule = require('../models/MessSchedule');
 exports.getMessSchedules = async (req, res) => {
   try {
     const { hostelId } = req.params;
-    const hostel = await Hostel.findById(hostelId);
-    if (!hostel) return res.status(404).json({ success: false, message: 'Hostel not found' });
-    const ownerIdStr = String(hostel.ownerId);
-    const userIdStr = String(req.user.id || req.user._id);
-    if (ownerIdStr !== userIdStr) {
-      return res.status(403).json({ success: false, message: 'Not authorized for this hostel' });
-    }
+    await assertOwnsHostel(req, hostelId);
     const schedules = await MessSchedule.find({ hostelId }).sort({ order: 1, mealType: 1 }).lean();
     res.status(200).json({ success: true, data: schedules });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3590,13 +3887,7 @@ exports.createMessSchedule = async (req, res) => {
   try {
     const { hostelId } = req.params;
     const { mealType, title, items, startTime, endTime, dayOfWeek, active, order } = req.body;
-    const hostel = await Hostel.findById(hostelId);
-    if (!hostel) return res.status(404).json({ success: false, message: 'Hostel not found' });
-    const ownerIdStr = String(hostel.ownerId);
-    const userIdStr = String(req.user.id || req.user._id);
-    if (ownerIdStr !== userIdStr) {
-      return res.status(403).json({ success: false, message: 'Not authorized for this hostel' });
-    }
+    await assertOwnsHostel(req, hostelId);
     if (!mealType || !startTime || !endTime) {
       return res.status(400).json({ success: false, message: 'mealType, startTime and endTime are required' });
     }
@@ -3613,20 +3904,14 @@ exports.createMessSchedule = async (req, res) => {
     });
     res.status(201).json({ success: true, data: schedule });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.updateMessSchedule = async (req, res) => {
   try {
     const { hostelId, scheduleId } = req.params;
-    const hostel = await Hostel.findById(hostelId);
-    if (!hostel) return res.status(404).json({ success: false, message: 'Hostel not found' });
-    const ownerIdStr = String(hostel.ownerId);
-    const userIdStr = String(req.user.id || req.user._id);
-    if (ownerIdStr !== userIdStr) {
-      return res.status(403).json({ success: false, message: 'Not authorized for this hostel' });
-    }
+    await assertOwnsHostel(req, hostelId);
     const schedule = await MessSchedule.findOne({ _id: scheduleId, hostelId });
     if (!schedule) return res.status(404).json({ success: false, message: 'Mess schedule not found' });
     const { mealType, title, items, startTime, endTime, dayOfWeek, active, order } = req.body;
@@ -3641,25 +3926,19 @@ exports.updateMessSchedule = async (req, res) => {
     await schedule.save();
     res.status(200).json({ success: true, data: schedule });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 exports.deleteMessSchedule = async (req, res) => {
   try {
     const { hostelId, scheduleId } = req.params;
-    const hostel = await Hostel.findById(hostelId);
-    if (!hostel) return res.status(404).json({ success: false, message: 'Hostel not found' });
-    const ownerIdStr = String(hostel.ownerId);
-    const userIdStr = String(req.user.id || req.user._id);
-    if (ownerIdStr !== userIdStr) {
-      return res.status(403).json({ success: false, message: 'Not authorized for this hostel' });
-    }
+    await assertOwnsHostel(req, hostelId);
     const deleted = await MessSchedule.findOneAndDelete({ _id: scheduleId, hostelId });
     if (!deleted) return res.status(404).json({ success: false, message: 'Mess schedule not found' });
     res.status(200).json({ success: true, message: 'Mess schedule deleted' });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3684,13 +3963,7 @@ const MESS_SEED_WEEK = [
 exports.seedMessSchedules = async (req, res) => {
   try {
     const { hostelId } = req.params;
-    const hostel = await Hostel.findById(hostelId);
-    if (!hostel) return res.status(404).json({ success: false, message: 'Hostel not found' });
-    const ownerIdStr = String(hostel.ownerId);
-    const userIdStr = String(req.user.id || req.user._id);
-    if (ownerIdStr !== userIdStr) {
-      return res.status(403).json({ success: false, message: 'Not authorized for this hostel' });
-    }
+    await assertOwnsHostel(req, hostelId);
     await MessSchedule.deleteMany({ hostelId });
     const inserts = [];
     let order = 0;
@@ -3732,24 +4005,23 @@ exports.seedMessSchedules = async (req, res) => {
     const created = await MessSchedule.insertMany(inserts);
     res.status(201).json({ success: true, data: created, message: 'Weekly mess schedule seeded (Sun–Sat, 3 meals)' });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 // Get mess (food) feedback for owner's hostels – for dashboard
 exports.getMessFeedback = async (req, res) => {
   try {
-    const ownerId = req.user.id || req.user._id;
-    const hostels = await Hostel.find({ ownerId }).select('_id').lean();
-    const hostelIds = hostels.map((h) => h._id);
+    const { hostelId } = req.query;
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
-    const hostelIdQuery = req.query.hostelId
-      ? { hostelId: req.query.hostelId }
-      : { hostelId: { $in: hostelIds } };
 
     const list = await Complaint.find({
       complaintType: 'food',
-      ...hostelIdQuery,
+      hostelId: { $in: scopedHostelIds },
     })
       .populate('raisedBy', 'name')
       .sort({ createdAt: -1 })
@@ -3758,34 +4030,33 @@ exports.getMessFeedback = async (req, res) => {
 
     res.status(200).json({ success: true, data: list });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 // ============ LEAVE / OUTPASS (Owner) ============
 exports.getLeaveRequests = async (req, res) => {
   try {
-    const ownerId = req.user.id || req.user._id;
-    const hostels = await Hostel.find({ ownerId }).select('_id').lean();
-    const hostelIds = hostels.map((h) => h._id);
-    const students = await User.find({ hostelId: { $in: hostelIds }, role: 'student' }).select('_id').lean();
-    const studentIds = students.map((s) => s._id);
     const { hostelId, status } = req.query;
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+    const students = await User.find({ hostelId: { $in: scopedHostelIds }, role: 'student' }).select('_id').lean();
+    const studentIds = students.map((s) => s._id);
+    if (studentIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
     const filter = { studentId: { $in: studentIds } };
     if (status) filter.status = status;
-    let list = await Permission.find(filter)
+    const list = await Permission.find(filter)
       .populate('studentId', 'name email phone')
       .populate('approvedBy', 'name')
       .sort({ createdAt: -1 })
       .lean();
-    if (hostelId) {
-      const inHostel = await User.find({ hostelId, role: 'student' }).select('_id').lean();
-      const ids = new Set(inHostel.map((u) => u._id.toString()));
-      list = list.filter((p) => ids.has((p.studentId && p.studentId._id || p.studentId).toString()));
-    }
     res.status(200).json({ success: true, data: list });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3794,9 +4065,7 @@ exports.approveLeaveRequest = async (req, res) => {
     const { permissionId } = req.params;
     const permission = await Permission.findById(permissionId).populate('studentId', 'hostelId pushToken expoPushToken');
     if (!permission) return res.status(404).json({ success: false, message: 'Leave request not found' });
-    const ownerId = req.user.id || req.user._id;
-    const hostel = await Hostel.findOne({ _id: permission.studentId.hostelId, ownerId });
-    if (!hostel) return res.status(403).json({ success: false, message: 'Not authorized for this hostel' });
+    await assertOwnsHostel(req, permission.studentId?.hostelId);
     permission.status = 'approved';
     permission.approvedBy = req.user.id;
     permission.approvedAt = new Date();
@@ -3829,7 +4098,7 @@ exports.approveLeaveRequest = async (req, res) => {
 
     res.status(200).json({ success: true, data: permission });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3839,9 +4108,7 @@ exports.rejectLeaveRequest = async (req, res) => {
     const { rejectionReason } = req.body;
     const permission = await Permission.findById(permissionId).populate('studentId', 'hostelId pushToken expoPushToken');
     if (!permission) return res.status(404).json({ success: false, message: 'Leave request not found' });
-    const ownerId = req.user.id || req.user._id;
-    const hostel = await Hostel.findOne({ _id: permission.studentId.hostelId, ownerId });
-    if (!hostel) return res.status(403).json({ success: false, message: 'Not authorized for this hostel' });
+    await assertOwnsHostel(req, permission.studentId?.hostelId);
     permission.status = 'rejected';
     permission.approvedBy = req.user.id;
     permission.approvedAt = new Date();
@@ -3877,18 +4144,19 @@ exports.rejectLeaveRequest = async (req, res) => {
 
     res.status(200).json({ success: true, data: permission });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
 // ============ MAINTENANCE / ROOM REQUESTS (Owner) ============
 exports.getMaintenanceComplaints = async (req, res) => {
   try {
-    const ownerId = req.user.id || req.user._id;
-    const hostels = await Hostel.find({ ownerId }).select('_id').lean();
-    const hostelIds = hostels.map((h) => h._id);
     const { hostelId, status } = req.query;
-    const filter = { complaintType: 'maintenance', hostelId: hostelId ? hostelId : { $in: hostelIds } };
+    const scopedHostelIds = await getScopedHostelIds(req, hostelId);
+    if (scopedHostelIds.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+    const filter = { complaintType: 'maintenance', hostelId: { $in: scopedHostelIds } };
     if (status) filter.status = status;
     const list = await Complaint.find(filter)
       .populate('raisedBy', 'name phone')
@@ -3897,7 +4165,7 @@ exports.getMaintenanceComplaints = async (req, res) => {
       .lean();
     res.status(200).json({ success: true, data: list });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3907,8 +4175,7 @@ exports.updateComplaintStatus = async (req, res) => {
     const { status, resolutionNotes } = req.body;
     const complaint = await Complaint.findById(id);
     if (!complaint) return res.status(404).json({ success: false, message: 'Complaint not found' });
-    const hostel = await Hostel.findOne({ _id: complaint.hostelId, ownerId: req.user.id || req.user._id });
-    if (!hostel) return res.status(403).json({ success: false, message: 'Not authorized' });
+    await assertOwnsHostel(req, complaint.hostelId);
     complaint.status = status || complaint.status;
     if (resolutionNotes != null) complaint.resolutionNotes = resolutionNotes;
     if (status === 'resolved' || status === 'closed') complaint.resolvedAt = new Date();
@@ -3916,7 +4183,7 @@ exports.updateComplaintStatus = async (req, res) => {
     await complaint.save();
     res.status(200).json({ success: true, data: complaint });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3949,10 +4216,10 @@ exports.generateRegistrationInviteQR = async (req, res) => {
       return res.status(400).json({ success: false, message: 'hostelId is required as a query parameter' });
     }
 
-    // Verify owner actually owns this hostel
-    const hostel = await Hostel.findOne({ _id: hostelId, ownerId }).lean();
+    await assertOwnsHostel(req, hostelId);
+    const hostel = await Hostel.findById(hostelId).lean();
     if (!hostel) {
-      return res.status(404).json({ success: false, message: 'Hostel not found or not owned by you' });
+      return res.status(404).json({ success: false, message: 'Hostel not found' });
     }
 
     // Create a signed invite token (7 days expiry)
@@ -3984,7 +4251,7 @@ exports.generateRegistrationInviteQR = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -3999,7 +4266,6 @@ exports.getStudentQR = async (req, res) => {
       return res.status(503).json({ success: false, message: 'QR library not installed on server. Run: npm install qrcode' });
     }
 
-    const ownerId = req.user._id || req.user.id;
     const student = await User.findById(req.params.id).select('name email phone studentId hostelId role status').lean();
 
     if (!student) {
@@ -4008,10 +4274,7 @@ exports.getStudentQR = async (req, res) => {
 
     // Verify this student belongs to a hostel owned by the requesting owner
     if (student.hostelId) {
-      const hostel = await Hostel.findOne({ _id: student.hostelId, ownerId }).lean();
-      if (!hostel) {
-        return res.status(403).json({ success: false, message: 'Not authorized to access this student' });
-      }
+      await assertOwnsHostel(req, student.hostelId);
     }
 
     // QR payload — encode student identity data
@@ -4042,7 +4305,7 @@ exports.getStudentQR = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 

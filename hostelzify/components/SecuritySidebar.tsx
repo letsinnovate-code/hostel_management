@@ -12,6 +12,7 @@ import {
   Shield,
   Menu,
   X,
+  Map,
 } from 'lucide-react';
 
 export default function SecuritySidebar() {
@@ -35,6 +36,11 @@ export default function SecuritySidebar() {
       label: 'All Students',
       href: '/security/students',
       icon: Users,
+    },
+    {
+      label: 'Students Map',
+      href: '/security/students-map',
+      icon: Map,
     },
     {
       label: 'Checked In',

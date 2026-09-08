@@ -48,6 +48,9 @@ const {
 } = require('../utils/alertHelpers');
 const { emitNewAlert, emitToSuperAdmins, emitToRole } = require('../socket/alertSocket');
 const notificationService = require('../../../utils/notificationService');
+const Hostel = require('../../../models/Hostel');
+const User = require('../../../models/User');
+const Notification = require('../../../models/Notification');
 
 class HostelAlertService {
   /**
@@ -72,7 +75,7 @@ class HostelAlertService {
       type,
       title,
       message,
-      hostelId,
+      hostelId: rawHostelId,
       recipientRole,
       recipientIds: explicitIds,
       studentId,
@@ -83,23 +86,65 @@ class HostelAlertService {
     } = opts;
 
     try {
-      // ── 1. Resolve category and priority from type ──────────────────
+      // ── 1. SECURITY & TENANT ISOLATION: Student Enrolled Hostel Binding ──
+      // If an alert is about a student, it MUST be bound to the student's enrolled hostel!
+      let resolvedHostelId = rawHostelId;
+      if (studentId) {
+        try {
+          const studentDoc = await User.findById(studentId).select('_id name hostelId').lean();
+          if (studentDoc && studentDoc.hostelId) {
+            const studentHostelId = String(studentDoc.hostelId);
+            if (resolvedHostelId && String(resolvedHostelId) !== studentHostelId) {
+              console.warn(`[HostelAlertService SECURITY] Alert hostel mismatch for student ${studentDoc.name} (${studentId}). Overriding hostel ${resolvedHostelId} -> ${studentHostelId}`);
+            }
+            resolvedHostelId = studentHostelId;
+          }
+        } catch (err) {
+          console.error('[HostelAlertService] Student lookup error:', err.message);
+        }
+      }
+
+      // ── 2. Resolve category and priority from type ──────────────────
       const category = resolveCategoryForType(type);
       const resolvedPriority = priority || resolvePriorityForType(type);
       const safeMetadata = sanitizeMetadata(metadata);
 
-      // ── 2. Resolve recipient user IDs ───────────────────────────────
+      // ── 3. Resolve recipient user IDs ───────────────────────────────
       let recipientDocs = [];
 
-      if (explicitIds && explicitIds.length > 0) {
+      if (recipientRole === 'owner' || recipientRole === ROLES.OWNER) {
+        // OWNER ALERTS: STRICT TENANT ISOLATION
+        // Only the owner of this specific hostel may ever receive owner alerts!
+        if (resolvedHostelId) {
+          try {
+            const hDoc = await Hostel.findById(resolvedHostelId).select('ownerId').lean();
+            if (hDoc?.ownerId) {
+              const trueOwnerId = String(hDoc.ownerId);
+              if (explicitIds && explicitIds.length > 0) {
+                // Ensure only the true owner is accepted from explicitIds
+                recipientDocs = explicitIds
+                  .filter((id) => String(id) === trueOwnerId)
+                  .map((id) => ({ _id: id }));
+                if (recipientDocs.length === 0) {
+                  recipientDocs = [{ _id: trueOwnerId }];
+                }
+              } else {
+                recipientDocs = [{ _id: trueOwnerId }];
+              }
+            }
+          } catch (e) {
+            console.error('[HostelAlertService] Owner resolution error:', e.message);
+          }
+        }
+      } else if (explicitIds && explicitIds.length > 0) {
         // Explicit list provided — no DB query needed
         recipientDocs = explicitIds.map((id) => ({ _id: id }));
       } else if (recipientRole === ROLES.SUPERADMIN) {
         recipientDocs = await getSuperAdmins();
       } else if (recipientRole === ROLES.STUDENT && studentId) {
         recipientDocs = [{ _id: studentId }];
-      } else if (recipientRole && hostelId) {
-        recipientDocs = await getUsersByRoleInHostel(hostelId, recipientRole);
+      } else if (recipientRole && resolvedHostelId) {
+        recipientDocs = await getUsersByRoleInHostel(resolvedHostelId, recipientRole);
         // Curfew/emergency alerts also always go to superadmins
         if (
           [ALERT_TYPES.CURFEW_VIOLATION, ALERT_TYPES.EMERGENCY_FIRE,
@@ -112,7 +157,7 @@ class HostelAlertService {
 
       const uniqueIds = [...new Set(extractUserIds(recipientDocs))];
 
-      // ── 3. Save HostelAlert document ────────────────────────────────
+      // ── 4. Save HostelAlert document ────────────────────────────────
       const alert = await HostelAlert.create({
         type,
         category,
@@ -120,7 +165,7 @@ class HostelAlertService {
         message,
         recipientRole,
         recipientIds: uniqueIds,
-        hostelId: hostelId || undefined,
+        hostelId: resolvedHostelId || undefined,
         studentId: studentId || undefined,
         metadata: safeMetadata,
         priority: resolvedPriority,
@@ -136,14 +181,32 @@ class HostelAlertService {
 
       const alertLean = alert.toObject();
 
-      // ── 4. Emit Socket.IO events (fire-and-forget) ──────────────────
-      setImmediate(() => {
+      // ── 5. Emit Socket.IO events & create in-app Notification (fire-and-forget) ──────────────────
+      setImmediate(async () => {
         try {
           for (const uid of uniqueIds) {
             emitNewAlert(uid, alertLean);
           }
+
+          // Dual-write to Notification collection so navbar bell / notifications view display it
+          if (uniqueIds.length > 0) {
+            const targetAudience = recipientRole === 'owner'
+              ? 'owner'
+              : (recipientRole === 'student' ? 'students' : 'staff');
+
+            await Notification.create({
+              title,
+              message,
+              type: ['urgent', 'high'].includes(resolvedPriority) ? 'alert' : 'announcement',
+              priority: resolvedPriority,
+              hostelId: resolvedHostelId || undefined,
+              targetAudience,
+              recipients: uniqueIds,
+              createdBy: triggeredByUserId || uniqueIds[0],
+            });
+          }
         } catch (socketErr) {
-          console.error('[HostelAlertService] Socket emit error:', socketErr.message);
+          console.error('[HostelAlertService] Socket/Notification emit error:', socketErr.message);
         }
       });
 
@@ -167,7 +230,7 @@ class HostelAlertService {
         try {
           await HostelEvent.create({
             eventType: type,
-            hostelId: hostelId || undefined,
+            hostelId: resolvedHostelId || undefined,
             studentId: studentId || undefined,
             triggeredBy: triggeredByUserId ? 'user' : 'system',
             triggeredByUserId: triggeredByUserId || undefined,
@@ -187,7 +250,7 @@ class HostelAlertService {
       try {
         await HostelEvent.create({
           eventType: type,
-          hostelId: hostelId || undefined,
+          hostelId: rawHostelId || undefined,
           studentId: studentId || undefined,
           payload: { error: err.message, ...sanitizeMetadata(metadata) },
           success: false,

@@ -1,0 +1,29 @@
+# EAS Build ignore for mobile-app
+
+# Dependencies and caches
+node_modules/
+.expo/
+dist/
+web-build/
+.vscode/
+
+# Native prebuild directories (EAS runs prebuild on cloud)
+android/
+ios/
+
+# Large binaries and APKs
+*.apk
+*.aab
+hostelzify.apk
+inspect-temp/
+
+# Logs and debug files
+*.log
+npm-debug.*
+yarn-debug.*
+
+# Shell scripts and documentation not needed for build
+*.md
+build_and_install.sh
+check_receipts.sh
+send_notification.sh

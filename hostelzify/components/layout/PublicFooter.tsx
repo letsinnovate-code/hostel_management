@@ -35,8 +35,8 @@ export default function PublicFooter() {
                         <ul className="space-y-4 text-sm">
                             <li><Link href="/marketplace" className="hover:text-blue-600 transition-colors font-medium">Marketplace</Link></li>
                             <li><Link href="/#features" className="hover:text-blue-600 transition-colors font-medium">Features</Link></li>
-                            <li><Link href="/pricing" className="hover:text-blue-600 transition-colors font-medium">Pricing</Link></li>
-                            <li><Link href="/demo" className="hover:text-blue-600 transition-colors font-medium">Request Demo</Link></li>
+                            <li><Link href="/register" className="hover:text-blue-600 transition-colors font-medium">Get Started Free</Link></li>
+                            <li><Link href="/login" className="hover:text-blue-600 transition-colors font-medium">Portal Sign In</Link></li>
                         </ul>
                     </div>
 
@@ -44,10 +44,10 @@ export default function PublicFooter() {
                     <div>
                         <h3 className="text-slate-900 font-bold mb-6">Company</h3>
                         <ul className="space-y-4 text-sm">
-                            <li><Link href="/about" className="hover:text-blue-600 transition-colors font-medium">About Us</Link></li>
-                            <li><Link href="/careers" className="hover:text-blue-600 transition-colors font-medium">Careers</Link></li>
-                            <li><Link href="/contact" className="hover:text-blue-600 transition-colors font-medium">Contact</Link></li>
-                            <li><Link href="/blog" className="hover:text-blue-600 transition-colors font-medium">Blog</Link></li>
+                            <li><Link href="/#features" className="hover:text-blue-600 transition-colors font-medium">About Platform</Link></li>
+                            <li><a href="mailto:careers@hostelzify.com" className="hover:text-blue-600 transition-colors font-medium">Careers</a></li>
+                            <li><a href="mailto:support@hostelzify.com" className="hover:text-blue-600 transition-colors font-medium">Help & Support</a></li>
+                            <li><Link href="/marketplace" className="hover:text-blue-600 transition-colors font-medium">Find Hostels</Link></li>
                         </ul>
                     </div>
 
@@ -65,7 +65,7 @@ export default function PublicFooter() {
                             </li>
                             <li className="flex items-center gap-3">
                                 <Mail className="w-5 h-5 text-blue-600 flex-shrink-0" />
-                                <span>support@hostelzify.com</span>
+                                <a href="mailto:support@hostelzify.com" className="hover:underline">support@hostelzify.com</a>
                             </li>
                         </ul>
                     </div>
@@ -74,9 +74,9 @@ export default function PublicFooter() {
                 <div className="pt-8 border-t border-gray-100 flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-slate-400">
                     <p>© {new Date().getFullYear()} Hostelzify. All rights reserved.</p>
                     <div className="flex gap-6">
-                        <Link href="/privacy" className="hover:text-slate-900 transition-colors">Privacy Policy</Link>
-                        <Link href="/terms" className="hover:text-slate-900 transition-colors">Terms of Service</Link>
-                        <Link href="/cookies" className="hover:text-slate-900 transition-colors">Cookie Policy</Link>
+                        <Link href="/#features" className="hover:text-slate-900 transition-colors">Privacy Policy</Link>
+                        <Link href="/#features" className="hover:text-slate-900 transition-colors">Terms of Service</Link>
+                        <Link href="/#features" className="hover:text-slate-900 transition-colors">Security Architecture</Link>
                     </div>
                 </div>
             </div>

@@ -7,6 +7,7 @@ import { useOwnerHostel } from '../../../contexts/OwnerHostelContext';
 import api from '../../../services/api';
 import { Wrench, User, ChevronLeft } from 'lucide-react';
 import Link from 'next/link';
+import toast from 'react-hot-toast';
 
 export default function OwnerMaintenancePage() {
   const { user } = useAuth();
@@ -47,10 +48,11 @@ export default function OwnerMaintenancePage() {
     setUpdating(updateModal.id);
     try {
       await api.updateComplaintStatus(updateModal.id, updateModal.status, updateModal.notes);
+      toast.success('Complaint status updated');
       setUpdateModal(null);
       loadMaintenance();
     } catch (e: any) {
-      alert(e.message || 'Failed to update');
+      toast.error(e.message || 'Failed to update');
     } finally {
       setUpdating(null);
     }

@@ -103,6 +103,7 @@ const MENU_ITEMS = [
       subItems: [
         { label: 'Alert Centre', href: '/owner/alerts' },
         { label: 'Notice Board', href: '/owner/broadcast' },
+        { label: 'Message Templates', href: '/owner/templates' },
       ],
     },
     {
@@ -127,7 +128,7 @@ const MENU_ITEMS = [
       icon: FileText,
       color: '#607D8B',
       subItems: [
-        { label: 'Audit Trail', href: '/owner/audit' },
+        { label: 'Audit Trail & Export', href: '/owner/audit' },
       ],
     },
     {

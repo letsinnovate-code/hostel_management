@@ -50,6 +50,7 @@ class ApiService {
               saveReturnPath(path);
               localStorage.removeItem(STORAGE_KEYS.TOKEN);
               localStorage.removeItem(STORAGE_KEYS.USER);
+              document.cookie = 'hostel_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; SameSite=Lax';
               window.location.href = path.startsWith('/superadmin') ? '/superadmin/login' : '/login';
             }
           }
@@ -337,6 +338,14 @@ class ApiService {
     return response.data;
   }
 
+  async exportOwnerData(params?: { hostelId?: string; format?: string; type?: string }) {
+    const response = await this.api.get('/owner/export', {
+      params,
+      responseType: params?.format === 'csv' ? 'blob' : 'json',
+    });
+    return response.data;
+  }
+
   async getSupportTickets() {
     const response = await this.api.get('/owner/support-tickets');
     return response.data;
@@ -557,6 +566,11 @@ class ApiService {
     return response.data;
   }
 
+  async deletePermission(permissionId: string) {
+    const response = await this.api.delete(`/warden/permissions/${permissionId}`);
+    return response.data;
+  }
+
   async getViolations() {
     const response = await this.api.get('/warden/violations');
     return response.data;
@@ -564,6 +578,26 @@ class ApiService {
 
   async createViolation(data: any) {
     const response = await this.api.post('/warden/violations', data);
+    return response.data;
+  }
+
+  async updateViolation(id: string, data: any) {
+    const response = await this.api.put(`/warden/violations/${id}`, data);
+    return response.data;
+  }
+
+  async escalateViolation(id: string, data: { escalateTo: string }) {
+    const response = await this.api.post(`/warden/violations/${id}/escalate`, data);
+    return response.data;
+  }
+
+  async deleteViolation(id: string) {
+    const response = await this.api.delete(`/warden/violations/${id}`);
+    return response.data;
+  }
+
+  async deleteCurfewViolation(id: string) {
+    const response = await this.api.delete(`/warden/curfew/violations/${id}`);
     return response.data;
   }
 
@@ -579,6 +613,11 @@ class ApiService {
 
   async rejectVisitor(visitorId: string, reason: string) {
     const response = await this.api.post(`/warden/visitors/${visitorId}/reject`, { rejectionReason: reason });
+    return response.data;
+  }
+
+  async deleteVisitor(visitorId: string) {
+    const response = await this.api.delete(`/warden/visitors/${visitorId}`);
     return response.data;
   }
 
@@ -608,18 +647,52 @@ class ApiService {
     return response.data;
   }
 
-  async updateLocation(location: { latitude: number; longitude: number }, accuracy?: number) {
-    const response = await this.api.post('/student/location/update', { location, accuracy });
+  async updateLocation(location: { latitude: number; longitude: number; accuracy?: number; timestamp?: string | number }, accuracy?: number) {
+    const acc = accuracy ?? location.accuracy;
+    const ts = location.timestamp ? new Date(location.timestamp).toISOString() : new Date().toISOString();
+    const response = await this.api.post('/student/location/update', {
+      location: {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        accuracy: acc,
+        timestamp: ts,
+      },
+      accuracy: acc,
+      timestamp: ts,
+      source: 'web',
+    });
     return response.data;
   }
 
-  async checkIn(location?: any) {
-    const response = await this.api.post('/student/check-in', { location });
+  async checkIn(location?: { latitude: number; longitude: number; accuracy?: number; timestamp?: string | number }) {
+    const payload = location ? {
+      location: {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        accuracy: location.accuracy,
+        timestamp: location.timestamp ? new Date(location.timestamp).toISOString() : new Date().toISOString(),
+      },
+      accuracy: location.accuracy,
+      timestamp: location.timestamp ? new Date(location.timestamp).toISOString() : new Date().toISOString(),
+      source: 'web',
+    } : {};
+    const response = await this.api.post('/student/check-in', payload);
     return response.data;
   }
 
-  async checkOut(location?: any) {
-    const response = await this.api.post('/student/check-out', { location });
+  async checkOut(location?: { latitude: number; longitude: number; accuracy?: number; timestamp?: string | number }) {
+    const payload = location ? {
+      location: {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        accuracy: location.accuracy,
+        timestamp: location.timestamp ? new Date(location.timestamp).toISOString() : new Date().toISOString(),
+      },
+      accuracy: location.accuracy,
+      timestamp: location.timestamp ? new Date(location.timestamp).toISOString() : new Date().toISOString(),
+      source: 'web',
+    } : {};
+    const response = await this.api.post('/student/check-out', payload);
     return response.data;
   }
 
@@ -725,6 +798,32 @@ class ApiService {
     return response.data;
   }
 
+  // Student Fee & Payment APIs
+  async getMyFeeStructure() {
+    const response = await this.api.get('/student/fee-structure');
+    return response.data;
+  }
+
+  async getMyPayments() {
+    const response = await this.api.get('/student/payments');
+    return response.data;
+  }
+
+  async createRazorpayOrder(amount: number, type?: string, periodStart?: string, periodEnd?: string) {
+    const response = await this.api.post('/student/payments/create-order', { amount, type, periodStart, periodEnd });
+    return response.data;
+  }
+
+  async createOrderForExistingPayment(paymentId: string) {
+    const response = await this.api.post(`/student/payments/${paymentId}/create-order`);
+    return response.data;
+  }
+
+  async verifyRazorpayPayment(data: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) {
+    const response = await this.api.post('/student/payments/verify', data);
+    return response.data;
+  }
+
   // Cleaner APIs
   async getTasks(params?: any) {
     const response = await this.api.get('/cleaner/tasks', { params });
@@ -820,6 +919,16 @@ class ApiService {
 
   async getShiftSchedule() {
     const response = await this.api.get('/cleaner/schedule');
+    return response.data;
+  }
+
+  async getCleanerLeaveRequests() {
+    const response = await this.api.get('/cleaner/leave');
+    return response.data;
+  }
+
+  async createCleanerLeaveRequest(data: { type: string; startDate: string; endDate: string; reason: string }) {
+    const response = await this.api.post('/cleaner/leave', data);
     return response.data;
   }
 
@@ -959,6 +1068,21 @@ class ApiService {
 
   async getSuperadminHostels() {
     const response = await this.api.get('/superadmin/hostels');
+    return response.data;
+  }
+
+  async getSuperadminOwners() {
+    const response = await this.api.get('/superadmin/owners');
+    return response.data;
+  }
+
+  async getSuperadminUsers(params?: { hostelId?: string; role?: string; search?: string }) {
+    const response = await this.api.get('/superadmin/users', { params });
+    return response.data;
+  }
+
+  async seedSuperadminDummyUsers() {
+    const response = await this.api.post('/superadmin/seed-dummy-users');
     return response.data;
   }
 

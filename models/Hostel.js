@@ -23,6 +23,10 @@ const hostelSchema = new mongoose.Schema({
     formattedAddress: String,
     placeId: String,
   },
+  timezone: {
+    type: String,
+    default: 'Asia/Kolkata',
+  },
   contact: {
     phone: String,
     email: String,
@@ -114,6 +118,30 @@ const hostelSchema = new mongoose.Schema({
   rules: {
     curfewTime: String, // HH:mm format
     weekendCurfewTime: String, // HH:mm format for weekends
+    curfewEndTime: { type: String, default: '06:00' }, // HH:mm format when morning curfew concludes
+    gracePeriodMinutes: { type: Number, default: 15 },
+    lastCurfewSweepDate: Date,
+    isManualCurfewActive: { type: Boolean, default: false },
+    manualCurfewStartedAt: Date,
+    manualCurfewEndedAt: Date,
+    curfewAlertConfig: {
+      recipients: {
+        students: { type: Boolean, default: true },
+        warden: { type: Boolean, default: true },
+        owner: { type: Boolean, default: true },
+        parents: { type: Boolean, default: true },
+        guards: { type: Boolean, default: false },
+      },
+      timing: {
+        preCurfewReminder: { type: Boolean, default: true },
+        preCurfewReminderMinutes: { type: Number, default: 15 },
+        onCurfewStart: { type: Boolean, default: true },
+        onTenMinuteWarning: { type: Boolean, default: true },
+        onGraceExpiry: { type: Boolean, default: true },
+        onParentEscalation: { type: Boolean, default: true },
+        parentEscalationMinutes: { type: Number, default: 30 },
+      },
+    },
     lateEntryAllowed: Boolean,
     lateEntryFine: { type: Number, default: 0 },
     visitorPolicy: String,

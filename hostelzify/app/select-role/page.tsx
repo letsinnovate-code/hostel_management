@@ -14,6 +14,7 @@ import {
   User,
   Loader2,
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 const roleConfig: Record<string, { label: string; icon: typeof Shield; color: string; bgColor: string; textColor: string; borderColor?: string; description: string; dashboardPath: string }> = {
   warden: {
@@ -34,7 +35,7 @@ const roleConfig: Record<string, { label: string; icon: typeof Shield; color: st
     textColor: 'text-purple-600',
     borderColor: 'border-purple-300',
     description: 'Manage cleaning tasks and complaints',
-    dashboardPath: '/cleaner/tasks',
+    dashboardPath: '/cleaner/dashboard',
   },
   supervisor: {
     label: 'Supervisor',
@@ -44,7 +45,7 @@ const roleConfig: Record<string, { label: string; icon: typeof Shield; color: st
     textColor: 'text-green-600',
     borderColor: 'border-green-300',
     description: 'Supervise hostel operations',
-    dashboardPath: '/cleaner/tasks',
+    dashboardPath: '/cleaner/dashboard',
   },
   security: {
     label: 'Security Guard',
@@ -157,8 +158,7 @@ export default function SelectRolePage() {
     } catch (error: any) {
       console.error('Error setting role:', error);
       setLoading(false);
-      setSwitchingRole(null);
-      alert(error.message || 'Failed to set role');
+      toast.error(error.message || 'Failed to set role');
     }
   };
 

@@ -5,7 +5,7 @@
 #   -H "Content-Type: application/json" \
 #   -d '{
 #     "name": "Owner User",
-#     "email": "birlapranjal460@gmail.com",
+#     "email": "panil9153@gmail.com",
 #     "password": "Test@123",
 #     "role": "owner",
 #     "phone": "1234567890"

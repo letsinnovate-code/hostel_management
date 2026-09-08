@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useOwnerHostel } from '../../../contexts/OwnerHostelContext';
 import api from '../../../services/api';
+import toast from 'react-hot-toast';
 
 interface Rule {
   _id?: string;
@@ -82,7 +83,7 @@ export default function OwnerRulesPage() {
       setRules(enrichedRules);
     } catch (error) {
       console.error('Failed to fetch rules:', error);
-      alert('Failed to fetch rules. Please try again.');
+      toast.error('Failed to fetch rules. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -92,7 +93,7 @@ export default function OwnerRulesPage() {
     e.preventDefault();
 
     if (!formData.hostelId) {
-      alert('Please select a hostel');
+      toast.error('Please select a hostel');
       return;
     }
 
@@ -100,10 +101,10 @@ export default function OwnerRulesPage() {
     try {
       if (editingRule?._id) {
         await api.updateRule(editingRule._id, formData);
-        alert('Rules updated successfully');
+        toast.success('Rules updated successfully');
       } else {
         await api.createRule(formData);
-        alert('Rules created successfully');
+        toast.success('Rules created successfully');
       }
 
       setShowForm(false);
@@ -111,7 +112,7 @@ export default function OwnerRulesPage() {
       resetForm();
       fetchRules();
     } catch (error: any) {
-      alert(error.response?.data?.message || error.message || 'Failed to save rules');
+      toast.error(error.response?.data?.message || error.message || 'Failed to save rules');
     } finally {
       setLoading(false);
     }
@@ -129,10 +130,10 @@ export default function OwnerRulesPage() {
     setLoading(true);
     try {
       await api.deleteRule(id);
-      alert('Rules deleted successfully');
+      toast.success('Rules deleted successfully');
       fetchRules();
     } catch (error: any) {
-      alert(error.response?.data?.message || error.message || 'Failed to delete rules');
+      toast.error(error.response?.data?.message || error.message || 'Failed to delete rules');
     } finally {
       setLoading(false);
     }

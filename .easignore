@@ -1,0 +1,46 @@
+# EAS Build ignore - Monorepo root
+# Only mobile-app is needed for EAS Build
+
+# Exclude all top-level folders except mobile-app
+/config/
+/controllers/
+/emails/
+/hostelzify/
+/middleware/
+/models/
+/modules/
+/routes/
+/scripts/
+/services/
+/utils/
+/uploads/
+/.system_generated/
+/.git/
+/node_modules/
+
+# Exclude root documentation, scripts and configs not used by mobile-app
+/*.md
+/*.sh
+/*.js
+/*.json
+!/mobile-app/**
+
+# Exclude unnecessary and large files inside mobile-app
+mobile-app/node_modules/
+mobile-app/.expo/
+mobile-app/dist/
+mobile-app/web-build/
+mobile-app/android/
+mobile-app/ios/
+mobile-app/*.apk
+mobile-app/*.aab
+mobile-app/hostelzify.apk
+mobile-app/inspect-temp/
+mobile-app/*.log
+mobile-app/.vscode/
+mobile-app/DEV_SETUP.md
+mobile-app/FIREBASE_SETUP.md
+mobile-app/PUSH_SETUP.md
+mobile-app/build_and_install.sh
+mobile-app/check_receipts.sh
+mobile-app/send_notification.sh

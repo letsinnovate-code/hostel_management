@@ -18,6 +18,7 @@ import {
   Sparkles,
   X,
   Zap,
+  CreditCard,
 } from 'lucide-react';
 
 interface StudentSidebarProps {
@@ -32,13 +33,16 @@ export default function StudentSidebar({ isOpen, onClose }: StudentSidebarProps)
   const router = useRouter();
   const pathname = usePathname();
 
-  const [expandedItems, setExpandedItems] = useState<string[]>(() => {
-    if (typeof window !== 'undefined') {
+  const [expandedItems, setExpandedItems] = useState<string[]>([]);
+
+  useEffect(() => {
+    try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      return stored ? JSON.parse(stored) : [];
-    }
-    return [];
-  });
+      if (stored) {
+        setExpandedItems(JSON.parse(stored));
+      }
+    } catch (_) {}
+  }, []);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -78,6 +82,14 @@ export default function StudentSidebar({ isOpen, onClose }: StudentSidebarProps)
       subItems: [
         { label: 'My Profile', href: '/student/profile' },
         { label: 'Documents', href: '/student/documents' },
+      ],
+    },
+    {
+      title: 'Finance & Payments',
+      icon: CreditCard,
+      color: '#4CAF50',
+      subItems: [
+        { label: 'Fees & Online Payments', href: '/student/payments' },
       ],
     },
     {

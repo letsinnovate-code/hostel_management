@@ -143,8 +143,28 @@ async function startScheduler() {
   );
   scheduledTasks.push(neverReturnedTask);
 
+  // ────────────────────────────────────────────────────────────────────
+  // 5. PERIODIC CURFEW EVALUATION (Multi-Stage Grace & Escalations)
+  //    Runs every 1 minute in IST timezone:
+  //    - Checks if any hostel has reached curfew time (Stage 0 silent check)
+  //    - Rechecks grace periods (15m grace expiry -> Stage 1 alerts)
+  //    - Processes escalations (30m overdue -> Stage 2 parent emergency notification)
+  // ────────────────────────────────────────────────────────────────────
+  const periodicCurfewTask = cron.schedule(
+    '* * * * *', // Every 1 minute
+    async () => {
+      try {
+        await CurfewAutomationService.runGlobalCurfewEvaluation();
+      } catch (err) {
+        console.error('[Scheduler] Periodic curfew evaluation failed:', err.message);
+      }
+    },
+    { timezone: 'Asia/Kolkata' }
+  );
+  scheduledTasks.push(periodicCurfewTask);
+
   console.log(`[Scheduler] ✅ ${scheduledTasks.length} cron job(s) scheduled`);
-  console.log('[Scheduler] Schedule: Curfew=21:00 IST, Attendance=08:00 IST, Leave=*/30min, Outside=06:00 IST');
+  console.log('[Scheduler] Schedule: Curfew=21:00 + * * * * * (1-min loop) IST, Attendance=08:00 IST, Leave=*/30min, Outside=06:00 IST');
 }
 
 /**

@@ -25,11 +25,22 @@ export interface AlertNotification {
 
 export interface CurfewViolation {
   _id: string;
-  studentId: { _id: string; name: string; email: string; roomId?: string } | string;
+  studentId: { _id: string; name: string; email: string; roomId?: string; phone?: string } | string;
   hostelId: string;
   violationDate: string;
   curfewTime: string;
-  status: 'open' | 'resolved' | 'excused';
+  status: 'open' | 'resolved' | 'excused' | 'pending_recheck' | 'acknowledged' | 'false_positive';
+  stage?: number;
+  graceExpiresAt?: string;
+  parentNotified?: boolean;
+  parentNotifiedAt?: string;
+  parentEmail?: string;
+  escalationLevel?: number;
+  lastKnownActivity?: string;
+  locationVerified?: boolean;
+  locationMethod?: 'gps' | 'attendance' | 'manual' | 'none';
+  resolutionNote?: string;
+  studentReturnedAt?: string;
   alertId?: string;
   createdAt: string;
 }
@@ -59,6 +70,38 @@ export interface DashboardStats {
   };
   alertsByCategory?: Record<string, number>;
   alertsByPriority?: Record<string, number>;
+}
+
+export interface CurfewTimerInfo {
+  violationId: string;
+  studentId: string;
+  studentName: string;
+  roomId: string;
+  status: string;
+  stage: number;
+  timerStatus: 'grace_timer_running' | 'parent_timer_running' | 'terminated_returned' | 'parent_alert_executed' | 'in_grace';
+  graceSecondsLeft: number;
+  parentAlertSecondsLeft: number;
+  graceExpiresAt?: string;
+  parentAlertDeadline?: string;
+  parentNotified: boolean;
+  parentNotifiedAt?: string;
+  studentReturnedAt?: string;
+  resolvedAt?: string;
+  resolutionNote?: string;
+}
+
+export interface ActiveTimersResponse {
+  hostelId: string;
+  hostelName: string;
+  curfewTime: string;
+  weekendCurfewTime?: string | null;
+  gracePeriodMinutes: number;
+  isCurfewActive: boolean;
+  lastCurfewSweepDate?: string | null;
+  activeTimersCount: number;
+  terminatedCount: number;
+  timers: CurfewTimerInfo[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -137,6 +180,60 @@ class AlertApiService {
 
   async triggerCurfewCheck(hostelId: string) {
     const response = await this.api.post(`/alerts/curfew/trigger?hostelId=${hostelId}`);
+    return response.data;
+  }
+
+  async startImmediateCurfew(hostelId: string) {
+    const response = await this.api.post(`/alerts/curfew/start-immediate?hostelId=${hostelId}`);
+    return response.data;
+  }
+
+  async simulateCurfewTimeline(hostelId: string, stage: '10min' | '15min' | '30min' | 'all') {
+    const response = await this.api.post('/alerts/curfew/simulate-timeline', { hostelId, stage });
+    return response.data;
+  }
+
+  async escalateCurfewViolation(violationId: string, reason?: string) {
+    const response = await this.api.post(`/alerts/curfew/${violationId}/escalate`, { reason });
+    return response.data;
+  }
+
+  async setCurfewTime(hostelId: string, curfewTime: string, options?: { weekendCurfewTime?: string; gracePeriodMinutes?: number }) {
+    const response = await this.api.post('/alerts/curfew/set-time', {
+      hostelId,
+      curfewTime,
+      ...options,
+    });
+    return response.data;
+  }
+
+  async endCurfew(hostelId?: string, note?: string) {
+    const response = await this.api.post('/alerts/curfew/end', { hostelId, note });
+    return response.data;
+  }
+
+  async getCurfewConfig(hostelId?: string) {
+    const response = await this.api.get('/alerts/curfew/config', { params: { hostelId } });
+    return response.data;
+  }
+
+  async updateCurfewConfig(hostelId?: string, config?: any) {
+    const response = await this.api.post('/alerts/curfew/config', { hostelId, ...config });
+    return response.data;
+  }
+
+  async getCurfewHistory(hostelId?: string, params?: { page?: number; limit?: number; date?: string; status?: string; search?: string }) {
+    const response = await this.api.get('/alerts/curfew/history', { params: { hostelId, ...params } });
+    return response.data;
+  }
+
+  async deleteCurfewViolation(violationId: string) {
+    const response = await this.api.delete(`/alerts/curfew/${violationId}`);
+    return response.data;
+  }
+
+  async getActiveCurfewTimers(hostelId: string) {
+    const response = await this.api.get('/alerts/curfew/active-timers', { params: { hostelId } });
     return response.data;
   }
 

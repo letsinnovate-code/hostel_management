@@ -30,6 +30,7 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const User = require('../../../models/User');
+const Hostel = require('../../../models/Hostel');
 const { SOCKET_EVENTS } = require('../utils/constants');
 
 let io = null;
@@ -66,11 +67,13 @@ function initSocket(httpServer) {
         socket.handshake.auth?.token ||
         socket.handshake.query?.token;
 
-      if (!token) {
-        return next(new Error('Authentication required'));
+      const jwtSecret = process.env.JWT_SECRET;
+      if (!jwtSecret) {
+        console.error('[SocketManager] CRITICAL: JWT_SECRET environment variable is not defined.');
+        return next(new Error('Server configuration error'));
       }
 
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+      const decoded = jwt.verify(token, jwtSecret);
       const user = await User.findById(decoded.id).select('_id name role hostelId status').lean();
 
       if (!user || user.status !== 'active') {
@@ -94,41 +97,78 @@ function initSocket(httpServer) {
   });
 
   // ─── Connection Handler ───────────────────────────────────────────
-  io.on('connection', (socket) => {
+  io.on('connection', async (socket) => {
     const { id: userId, role, hostelId } = socket.user;
 
     console.log(`[Socket] Connected: user=${userId} role=${role} hostel=${hostelId}`);
 
     // Auto-join personal room
     socket.join(`user:${userId}`);
+    const joinedRooms = [`user:${userId}`];
 
     // Auto-join role+hostel room (if hostelId present)
     if (hostelId) {
       socket.join(`role:${role}:${hostelId}`);
       socket.join(`hostel:${hostelId}`);
+      joinedRooms.push(`role:${role}:${hostelId}`, `hostel:${hostelId}`);
+    }
+
+    // Owner auto-joins rooms for ALL hostels they own
+    const isOwner = role === 'owner' || (Array.isArray(socket.user.role) && socket.user.role.includes('owner'));
+    if (isOwner) {
+      try {
+        const owned = await Hostel.find({ ownerId: userId }).select('_id').lean();
+        for (const h of owned) {
+          const hid = String(h._id);
+          socket.join(`role:owner:${hid}`);
+          socket.join(`hostel:${hid}`);
+          joinedRooms.push(`role:owner:${hid}`, `hostel:${hid}`);
+        }
+        console.log(`[Socket] Owner ${userId} joined rooms for ${owned.length} hostel(s)`);
+      } catch (err) {
+        console.error('[Socket] Failed to join owner hostel rooms:', err.message);
+      }
     }
 
     // Superadmin gets global room
     if (role === 'superadmin') {
       socket.join('superadmin');
+      joinedRooms.push('superadmin');
     }
 
     // Acknowledge connection with user room info
     socket.emit(SOCKET_EVENTS.CONNECTED, {
       message: 'Connected to Hostel Alert System',
-      rooms: [
-        `user:${userId}`,
-        hostelId ? `hostel:${hostelId}` : null,
-        hostelId ? `role:${role}:${hostelId}` : null,
-      ].filter(Boolean),
+      rooms: [...new Set(joinedRooms)],
     });
 
     // ─── Client-controlled room joins ────────────────────────────
-    // Allow client to join specific hostel rooms (e.g. admin viewing multiple hostels)
-    socket.on(SOCKET_EVENTS.JOIN_HOSTEL_ROOM, ({ hostelId: hId }) => {
+    // Only permit joining rooms for hostels the user actually owns, administers, or is enrolled in
+    socket.on(SOCKET_EVENTS.JOIN_HOSTEL_ROOM, async ({ hostelId: hId }) => {
       if (!hId) return;
-      socket.join(`hostel:${hId}`);
-      console.log(`[Socket] user=${userId} joined hostel:${hId}`);
+      try {
+        const targetHostelId = String(hId);
+        if (role === 'superadmin') {
+          socket.join(`hostel:${targetHostelId}`);
+          console.log(`[Socket] Superadmin ${userId} joined hostel:${targetHostelId}`);
+        } else if (isOwner) {
+          const ownsHostel = await Hostel.exists({ _id: targetHostelId, ownerId: userId });
+          if (ownsHostel) {
+            socket.join(`hostel:${targetHostelId}`);
+            socket.join(`role:owner:${targetHostelId}`);
+            console.log(`[Socket] Owner ${userId} joined verified hostel:${targetHostelId}`);
+          } else {
+            console.warn(`[Socket SECURITY] Owner ${userId} denied joining unowned hostel:${targetHostelId}`);
+          }
+        } else if (hostelId && String(hostelId) === targetHostelId) {
+          socket.join(`hostel:${targetHostelId}`);
+          console.log(`[Socket] User ${userId} joined assigned hostel:${targetHostelId}`);
+        } else {
+          console.warn(`[Socket SECURITY] User ${userId} denied joining unauthorized hostel:${targetHostelId}`);
+        }
+      } catch (err) {
+        console.error('[Socket] JOIN_HOSTEL_ROOM error:', err.message);
+      }
     });
 
     socket.on(SOCKET_EVENTS.LEAVE_ROOM, ({ room }) => {

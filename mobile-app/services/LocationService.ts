@@ -5,17 +5,18 @@ import api from './api';
 const LOCATION_TASK_NAME = 'background-location-task';
 
 // Define the background task – network often fails when app is backgrounded (e.g. iOS Simulator); retry once and log as warn
-async function sendBackgroundLocationUpdate(lat: number, lng: number, accuracy?: number, retry = true): Promise<void> {
+async function sendBackgroundLocationUpdate(lat: number, lng: number, accuracy?: number, timestamp?: number, retry = true): Promise<void> {
     try {
         await api.updateLocation(
-            { latitude: lat, longitude: lng },
-            accuracy
+            { latitude: lat, longitude: lng, accuracy, timestamp },
+            accuracy,
+            timestamp
         );
     } catch (err: any) {
         const isNetwork = err?.message?.includes('Network') || err?.message?.includes('connection') || err?.message?.includes('timeout');
         if (isNetwork && retry) {
             await new Promise((r) => setTimeout(r, 2000));
-            return sendBackgroundLocationUpdate(lat, lng, accuracy, false);
+            return sendBackgroundLocationUpdate(lat, lng, accuracy, timestamp, false);
         }
         if (__DEV__) {
             console.warn('Background location update skipped:', isNetwork ? 'no network (common when backgrounded)' : err?.message || err);
@@ -33,7 +34,8 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }: any) => {
         await sendBackgroundLocationUpdate(
             location.coords.latitude,
             location.coords.longitude,
-            location.coords.accuracy
+            location.coords.accuracy,
+            location.timestamp
         );
     }
 });
@@ -101,14 +103,18 @@ export class LocationService {
                 {
                     latitude: location.coords.latitude,
                     longitude: location.coords.longitude,
+                    accuracy: location.coords.accuracy ?? undefined,
+                    timestamp: location.timestamp,
                 },
-                location.coords.accuracy ?? undefined
+                location.coords.accuracy ?? undefined,
+                location.timestamp
             );
 
             return {
                 latitude: location.coords.latitude,
                 longitude: location.coords.longitude,
                 accuracy: location.coords.accuracy ?? undefined,
+                timestamp: location.timestamp,
             };
         } catch (error) {
             console.error('Error getting current location:', error);

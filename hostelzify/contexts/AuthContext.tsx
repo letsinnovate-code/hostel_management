@@ -63,6 +63,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           if (parsed?.roles && !Array.isArray(parsed.roles)) {
             parsed.roles = undefined;
           }
+          document.cookie = `hostel_token=${storedToken}; path=/; max-age=${30 * 24 * 60 * 60}; SameSite=Lax`;
           setToken(storedToken);
           setUser(parsed);
         }
@@ -105,6 +106,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (typeof window !== 'undefined') {
         localStorage.setItem(STORAGE_KEYS.TOKEN, newToken);
         localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+        localStorage.removeItem(STORAGE_KEYS.OWNER_SELECTED_HOSTEL);
+        document.cookie = `hostel_token=${newToken}; path=/; max-age=${30 * 24 * 60 * 60}; SameSite=Lax`;
       }
 
       setToken(newToken);
@@ -146,6 +149,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (typeof window !== 'undefined') {
         localStorage.setItem(STORAGE_KEYS.TOKEN, newToken);
         localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+        localStorage.removeItem(STORAGE_KEYS.OWNER_SELECTED_HOSTEL);
+        document.cookie = `hostel_token=${newToken}; path=/; max-age=${30 * 24 * 60 * 60}; SameSite=Lax`;
       }
 
       setToken(newToken);
@@ -162,6 +167,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (typeof window !== 'undefined') {
         localStorage.removeItem(STORAGE_KEYS.TOKEN);
         localStorage.removeItem(STORAGE_KEYS.USER);
+        localStorage.removeItem(STORAGE_KEYS.OWNER_SELECTED_HOSTEL);
+        document.cookie = 'hostel_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; SameSite=Lax';
       }
       setToken(null);
       setUser(null);

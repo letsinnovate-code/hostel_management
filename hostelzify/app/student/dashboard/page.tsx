@@ -27,6 +27,7 @@ import {
   Activity,
   Timer,
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 export default function StudentDashboard() {
   const { user } = useAuth();
@@ -59,19 +60,19 @@ export default function StudentDashboard() {
   const loadData = async () => {
     setLoading(true);
     try {
-      // Send current location so backend can set inside/outside from geo-fence, then fetch data
-      if (navigator.geolocation) {
-        try {
-          const loc = await new Promise<{ latitude: number; longitude: number }>((resolve, reject) => {
-            navigator.geolocation.getCurrentPosition(
-              (p) => resolve({ latitude: p.coords.latitude, longitude: p.coords.longitude }),
-              reject,
-              { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-            );
-          });
-          await api.updateLocation(loc);
-          setCurrentLocationForMap(loc);
-        } catch (_) {}
+      // Send current location asynchronously in background without blocking dashboard initial render
+      if (typeof window !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          async (p) => {
+            try {
+              const loc = { latitude: p.coords.latitude, longitude: p.coords.longitude };
+              await api.updateLocation(loc);
+              setCurrentLocationForMap(loc);
+            } catch (_) {}
+          },
+          () => {},
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+        );
       }
       const [statusRes, notificationsRes, permissionsRes, violationsRes, analyticsRes, boundaryRes] = await Promise.all([
         api.getStatus().catch(() => ({ data: null })),
@@ -114,7 +115,7 @@ export default function StudentDashboard() {
     }
   };
 
-  const getCurrentLocation = (): Promise<{ latitude: number; longitude: number }> => {
+  const getCurrentLocation = (): Promise<{ latitude: number; longitude: number; accuracy?: number; timestamp?: string }> => {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
         reject(new Error('Geolocation is not supported by your browser'));
@@ -126,22 +127,25 @@ export default function StudentDashboard() {
           const coords = {
             latitude: position.coords.latitude,
             longitude: position.coords.longitude,
-          };
-          console.log('Current location captured:', {
-            latitude: coords.latitude,
-            longitude: coords.longitude,
             accuracy: position.coords.accuracy,
-          });
+            timestamp: new Date(position.timestamp || Date.now()).toISOString(),
+          };
+          console.log('Current location captured:', coords);
           resolve(coords);
         },
         (error) => {
           console.error('Geolocation error:', error);
-          reject(new Error(`Location access denied: ${error.message}`));
+          const errorMsg = error.code === 1
+            ? 'Location access denied. Please enable GPS permissions in your browser.'
+            : error.code === 2
+            ? 'Location unavailable. Please ensure your device GPS is turned on.'
+            : `Location acquisition error: ${error.message}`;
+          reject(new Error(errorMsg));
         },
         {
           enableHighAccuracy: true,
-          timeout: 15000, // Increased timeout
-          maximumAge: 0, // Always get fresh location
+          timeout: 15000,
+          maximumAge: 0,
         }
       );
     });
@@ -151,11 +155,11 @@ export default function StudentDashboard() {
     try {
       const location = await getCurrentLocation();
       await api.checkIn(location);
-      alert('Checked in successfully');
+      toast.success('Checked in successfully');
       // Reload data and analytics in parallel
       Promise.all([loadData(), loadAnalytics()]);
     } catch (error: any) {
-      alert(error.message || 'Failed to check in');
+      toast.error(error.message || 'Failed to check in');
     }
   };
 
@@ -163,11 +167,11 @@ export default function StudentDashboard() {
     try {
       const location = await getCurrentLocation();
       await api.checkOut(location);
-      alert('Checked out successfully');
+      toast.success('Checked out successfully');
       // Reload data and analytics in parallel
       Promise.all([loadData(), loadAnalytics()]);
     } catch (error: any) {
-      alert(error.message || 'Failed to check out');
+      toast.error(error.message || 'Failed to check out');
     }
   };
 

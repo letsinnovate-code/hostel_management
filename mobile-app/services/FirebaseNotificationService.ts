@@ -1,21 +1,24 @@
+import { Platform } from 'react-native';
 import api from './api';
 
-// Load native module only when available (fails in Expo Go / web / when not linked)
+// Load native module only on mobile when available (fails in Expo Go / web / when not linked)
 let messaging: { (): any; AuthorizationStatus?: any } | null = null;
-try {
-  messaging = require('@react-native-firebase/messaging').default;
-} catch {
-  // RNFBAppModule not available - Expo Go, web, or native build without Firebase
+if (Platform.OS !== 'web') {
+  try {
+    messaging = require('@react-native-firebase/messaging').default;
+  } catch {
+    // RNFBAppModule not available - Expo Go, web, or native build without Firebase
+  }
 }
 
 /**
  * Firebase Cloud Messaging Service
  * Handles push notification registration and token management.
- * No-ops when native Firebase is not available (e.g. Expo Go).
+ * No-ops when native Firebase is not available (e.g. Expo Go, Web).
  */
 export class FirebaseNotificationService {
   static get isAvailable(): boolean {
-    return messaging != null;
+    return Platform.OS !== 'web' && messaging != null;
   }
 
   /**
@@ -23,7 +26,7 @@ export class FirebaseNotificationService {
    * Use this when you want to register the token yourself (e.g. from settings).
    */
   static async getTokenAsync(): Promise<string | null> {
-    if (!messaging) return null;
+    if (Platform.OS === 'web' || !messaging) return null;
     try {
       const authStatus = await messaging().requestPermission();
       const Auth = (messaging as any).AuthorizationStatus;
@@ -46,13 +49,16 @@ export class FirebaseNotificationService {
    * Request notification permissions and get FCM token, then register with backend
    */
   static async registerForPushNotificationsAsync(): Promise<string | null> {
+    if (Platform.OS === 'web') return null;
     const token = await this.getTokenAsync();
-    if (token) {
+    if (token && messaging) {
       await api.registerPushToken(token);
-      messaging?.().onTokenRefresh(async (newToken: string) => {
-        console.log('FCM Token refreshed:', newToken);
-        await api.registerPushToken(newToken);
-      });
+      try {
+        messaging().onTokenRefresh(async (newToken: string) => {
+          console.log('FCM Token refreshed:', newToken);
+          await api.registerPushToken(newToken);
+        });
+      } catch {}
     }
     return token;
   }
@@ -61,33 +67,43 @@ export class FirebaseNotificationService {
    * Set up foreground notification handler
    */
   static setupForegroundHandler(callback: (notification: any) => void) {
-    if (!messaging) return () => {};
-    return messaging().onMessage(async (remoteMessage: any) => {
-      console.log('Foreground notification:', remoteMessage);
-      callback(remoteMessage);
-    });
+    if (Platform.OS === 'web' || !messaging) return () => {};
+    try {
+      return messaging().onMessage(async (remoteMessage: any) => {
+        console.log('Foreground notification:', remoteMessage);
+        callback(remoteMessage);
+      });
+    } catch {
+      return () => {};
+    }
   }
 
   /**
    * Set up background notification handler
    */
   static setupBackgroundHandler() {
-    if (!messaging) return;
-    messaging().setBackgroundMessageHandler(async (remoteMessage: any) => {
-      console.log('Background notification:', remoteMessage);
-    });
+    if (Platform.OS === 'web' || !messaging) return;
+    try {
+      messaging().setBackgroundMessageHandler(async (remoteMessage: any) => {
+        console.log('Background notification:', remoteMessage);
+      });
+    } catch {
+      // Firebase not initialized
+    }
   }
 
   /**
    * Handle notification opened from quit state
    */
   static async getInitialNotification() {
-    if (!messaging) return null;
-    const remoteMessage = await messaging().getInitialNotification();
-    if (remoteMessage) {
-      console.log('Notification caused app to open:', remoteMessage);
-      return remoteMessage;
-    }
+    if (Platform.OS === 'web' || !messaging) return null;
+    try {
+      const remoteMessage = await messaging().getInitialNotification();
+      if (remoteMessage) {
+        console.log('Notification caused app to open:', remoteMessage);
+        return remoteMessage;
+      }
+    } catch {}
     return null;
   }
 
@@ -95,11 +111,15 @@ export class FirebaseNotificationService {
    * Handle notification opened from background
    */
   static onNotificationOpenedApp(callback: (notification: any) => void) {
-    if (!messaging) return () => {};
-    return messaging().onNotificationOpenedApp((remoteMessage: any) => {
-      console.log('Notification opened app from background:', remoteMessage);
-      callback(remoteMessage);
-    });
+    if (Platform.OS === 'web' || !messaging) return () => {};
+    try {
+      return messaging().onNotificationOpenedApp((remoteMessage: any) => {
+        console.log('Notification opened app from background:', remoteMessage);
+        callback(remoteMessage);
+      });
+    } catch {
+      return () => {};
+    }
   }
 }
 

@@ -70,7 +70,7 @@ export default function PublicNavbar() {
                             Log In
                         </Link>
                         <Link
-                            href="/signup"
+                            href="/register"
                             className="px-5 py-2.5 bg-blue-600 text-white text-sm font-bold rounded-xl hover:bg-blue-700 transition-all shadow-md shadow-blue-200 hover:scale-105 active:scale-95"
                         >
                             Get Started
@@ -111,7 +111,7 @@ export default function PublicNavbar() {
                             Log In
                         </Link>
                         <Link
-                            href="/signup"
+                            href="/register"
                             onClick={() => setIsMobileMenuOpen(false)}
                             className="text-center py-4 bg-blue-600 text-white rounded-xl font-bold shadow-lg shadow-blue-100"
                         >

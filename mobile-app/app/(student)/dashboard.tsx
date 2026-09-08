@@ -186,7 +186,7 @@ export default function StudentDashboard() {
     const intervalMs = 60 * 1000;
     const intervalId = setInterval(() => {
       if (!isInsideRef.current) return;
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced, maximumAge: 30000 })
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
         .then((loc) => sendLocation(
           { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
           loc.coords.accuracy ?? undefined
@@ -293,7 +293,6 @@ export default function StudentDashboard() {
         if (permStatus === 'granted') {
           const loc = await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.Low,
-            maximumAge: 60000,
           });
           await api.updateLocation(
             { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
@@ -366,7 +365,7 @@ export default function StudentDashboard() {
       Location.getForegroundPermissionsAsync()
         .then(({ status: perm }) =>
           perm === 'granted'
-            ? Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low, maximumAge: 30000 })
+            ? Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low })
                 .then((pos) => (pos?.coords ? { latitude: pos.coords.latitude, longitude: pos.coords.longitude } : null))
                 .catch(() => null)
             : null
@@ -389,13 +388,14 @@ export default function StudentDashboard() {
     sendLocationThenLoadData();
   };
 
-  const getCurrentLocation = (): Promise<{ latitude: number; longitude: number }> => {
+  const getCurrentLocation = (): Promise<{ latitude: number; longitude: number; accuracy?: number; timestamp?: number }> => {
     return Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.Balanced,
-      maximumAge: 10000,
     }).then((pos) => ({
       latitude: pos.coords.latitude,
       longitude: pos.coords.longitude,
+      accuracy: pos.coords.accuracy ?? undefined,
+      timestamp: pos.timestamp,
     }));
   };
 

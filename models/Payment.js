@@ -47,5 +47,10 @@ const paymentSchema = new mongoose.Schema({
   },
 });
 
+paymentSchema.index({ razorpayOrderId: 1 }, { sparse: true });
+paymentSchema.index({ studentId: 1, status: 1 });
+paymentSchema.index({ hostelId: 1, status: 1 });
+paymentSchema.index({ hostelId: 1, createdAt: -1 });
+
 module.exports = mongoose.model('Payment', paymentSchema);
 

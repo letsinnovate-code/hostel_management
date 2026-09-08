@@ -25,7 +25,12 @@ router.post('/callbacks', createCallbackRequest);
 router.get('/verify-invite/:token', (req, res) => {
   try {
     const { token } = req.params;
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      console.error('[PublicRoutes] CRITICAL: JWT_SECRET environment variable is missing.');
+      return res.status(500).json({ success: false, message: 'Server configuration error' });
+    }
+    const decoded = jwt.verify(token, secret);
     if (decoded.type !== 'registration-invite') {
       return res.status(400).json({ success: false, message: 'Invalid invite token type' });
     }

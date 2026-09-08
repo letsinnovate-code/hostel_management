@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useOwnerHostel } from '../../../contexts/OwnerHostelContext';
 import api from '../../../services/api';
+import toast from 'react-hot-toast';
 import {
   Bell,
   Plus,
@@ -123,9 +124,10 @@ export default function OwnerBroadcast() {
         sendEmail: true,
         hostelId: selectedHostel as string,
       });
+      toast.success(editingNotification ? 'Notice updated successfully' : 'Notice published to board');
       loadNotifications();
     } catch (error: any) {
-      alert(error.message || 'Failed to save notification');
+      toast.error(error.message || 'Failed to save notification');
     } finally {
       setLoading(false);
     }
@@ -135,9 +137,10 @@ export default function OwnerBroadcast() {
     if (!confirm('Are you sure you want to delete this notice?')) return;
     try {
       await api.deleteNotification(id);
+      toast.success('Notice deleted');
       loadNotifications();
     } catch (error: any) {
-      alert(error.message || 'Failed to delete notification');
+      toast.error(error.message || 'Failed to delete notification');
     }
   };
 
@@ -162,9 +165,9 @@ export default function OwnerBroadcast() {
     try {
       const result = await api.sendNotificationReminder(id);
       const count = result?.pushSent ?? 0;
-      alert(`Push reminder sent to ${count} device(s).`);
+      toast.success(`Push reminder sent to ${count} device(s).`);
     } catch (error: any) {
-      alert(error?.message || 'Failed to send reminder');
+      toast.error(error?.message || 'Failed to send reminder');
     } finally {
       setSendingReminderId(null);
     }

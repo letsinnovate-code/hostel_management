@@ -29,6 +29,16 @@ const gateEventSchema = new mongoose.Schema({
     latitude: Number,
     longitude: Number,
   },
+  // Forensics & Telemetry
+  accuracy: Number,
+  distanceFromHostel: Number,
+  capturedAt: Date,
+  serverReceivedAt: {
+    type: Date,
+    default: Date.now,
+  },
+  clientIp: String,
+  userAgent: String,
   verificationMethod: {
     type: String,
     enum: ['auto', 'manual', 'rfid', 'qr'],
@@ -50,5 +60,7 @@ const gateEventSchema = new mongoose.Schema({
 gateEventSchema.index({ hostelId: 1, time: -1 });
 gateEventSchema.index({ studentId: 1, time: -1 });
 gateEventSchema.index({ hostelId: 1, studentId: 1, time: -1 });
+gateEventSchema.index({ studentId: 1, type: 1, time: -1 });
 
 module.exports = mongoose.model('GateEvent', gateEventSchema);
+

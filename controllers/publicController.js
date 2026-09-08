@@ -5,6 +5,11 @@ const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const { uploadImageToS3 } = require('../utils/s3Upload');
 
+function escapeRegex(string) {
+  if (typeof string !== 'string') return '';
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Get all public hostels (only active ones)
 exports.getPublicHostels = async (req, res) => {
   try {
@@ -17,8 +22,8 @@ exports.getPublicHostels = async (req, res) => {
       query.type = type;
     }
     
-    if (city) {
-      query['address.city'] = new RegExp(city, 'i');
+    if (city && typeof city === 'string') {
+      query['address.city'] = new RegExp(escapeRegex(city.trim()), 'i');
     }
     
     // Price filtering - find hostels where price range overlaps with filter
@@ -51,14 +56,15 @@ exports.getPublicHostels = async (req, res) => {
       }
     }
     
-    // Search filtering
-    if (search) {
+    // Search filtering (sanitized against ReDoS and regex special characters)
+    if (search && typeof search === 'string') {
+      const sanitized = escapeRegex(search.trim());
       const searchFilter = {
         $or: [
-          { name: new RegExp(search, 'i') },
-          { 'address.city': new RegExp(search, 'i') },
-          { 'address.state': new RegExp(search, 'i') },
-          { shortDescription: new RegExp(search, 'i') },
+          { name: new RegExp(sanitized, 'i') },
+          { 'address.city': new RegExp(sanitized, 'i') },
+          { 'address.state': new RegExp(sanitized, 'i') },
+          { shortDescription: new RegExp(sanitized, 'i') },
         ],
       };
       
@@ -186,9 +192,14 @@ exports.uploadSelfDocuments = async (req, res) => {
       return res.status(401).json({ success: false, message: 'No token provided' });
     }
     const token = authHeader.split(' ')[1];
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      console.error('[PublicController] CRITICAL: JWT_SECRET environment variable is missing.');
+      return res.status(500).json({ success: false, message: 'Server configuration error' });
+    }
     let decoded;
     try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET);
+      decoded = jwt.verify(token, jwtSecret);
     } catch (_) {
       return res.status(401).json({ success: false, message: 'Invalid or expired token' });
     }

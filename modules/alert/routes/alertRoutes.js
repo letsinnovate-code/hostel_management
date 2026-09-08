@@ -159,6 +159,110 @@ router.post(
   ctrl.triggerManualCurfewCheck
 );
 
+/**
+ * POST /api/alerts/curfew/start-immediate
+ * Warden initiates event-based curfew sweep & presence verification immediately.
+ */
+router.post(
+  '/curfew/start-immediate',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.startImmediateWardenCurfew
+);
+
+/**
+ * POST /api/alerts/curfew/simulate-timeline
+ * Advance or test curfew timeline stages (10min, 15min, 30min).
+ */
+router.post(
+  '/curfew/simulate-timeline',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.simulateCurfewTimeline
+);
+
+/**
+ * POST /api/alerts/curfew/set-time
+ * Warden or Owner sets or updates hostel curfew schedule.
+ */
+router.post(
+  '/curfew/set-time',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.setCurfewTime
+);
+
+/**
+ * GET /api/alerts/curfew/active-timers
+ * Fetch active grace period and parent alert countdown timers for a hostel.
+ */
+router.get(
+  '/curfew/active-timers',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.getActiveCurfewTimers
+);
+
+/**
+ * POST /api/alerts/curfew/end
+ * Warden or Owner ends active curfew immediately.
+ */
+router.post(
+  '/curfew/end',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.endCurfew
+);
+
+/**
+ * GET /api/alerts/curfew/config
+ * Fetch curfew & alert timing/recipient config.
+ */
+router.get(
+  '/curfew/config',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.getCurfewConfig
+);
+
+/**
+ * POST /api/alerts/curfew/config
+ * Update curfew & alert timing/recipient config.
+ */
+router.post(
+  '/curfew/config',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.updateCurfewConfig
+);
+
+/**
+ * GET /api/alerts/curfew/history
+ * Fetch historical curfew sessions and student violation audit records.
+ */
+router.get(
+  '/curfew/history',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.getCurfewHistory
+);
+
+/**
+ * POST /api/alerts/curfew/:id/escalate
+ * Manually escalate a curfew violation to Owner.
+ */
+router.post(
+  '/curfew/:id/escalate',
+  authorize('warden', 'owner', 'superadmin'),
+  validateObjectIdParam('id'),
+  handleValidationErrors,
+  ctrl.escalateCurfewViolation
+);
+
+/**
+ * DELETE /api/alerts/curfew/:id
+ * Delete a curfew violation record.
+ */
+router.delete(
+  '/curfew/:id',
+  authorize('warden', 'owner', 'superadmin'),
+  validateObjectIdParam('id'),
+  handleValidationErrors,
+  ctrl.deleteCurfewViolation
+);
+
 // ─────────────────────────────────────────────
 // ATTENDANCE ALERTS (warden/owner/superadmin)
 // ─────────────────────────────────────────────

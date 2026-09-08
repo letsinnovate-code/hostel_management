@@ -14,6 +14,7 @@ import EnquiryForm from '../../../components/marketplace/EnquiryForm';
 import CallbackForm from '../../../components/marketplace/CallbackForm';
 import PublicNavbar from '../../../components/layout/PublicNavbar';
 import PublicFooter from '../../../components/layout/PublicFooter';
+import toast from 'react-hot-toast';
 
 export default function MarketplaceHostelDetailPage() {
   const router = useRouter();
@@ -196,7 +197,7 @@ export default function MarketplaceHostelDetailPage() {
                   onClose={() => setShowEnquiryForm(false)}
                   onSuccess={() => {
                     setShowEnquiryForm(false);
-                    alert('Enquiry submitted successfully! We will get back to you soon.');
+                    toast.success('Enquiry submitted successfully! We will get back to you soon.');
                   }}
                 />
               </div>
@@ -212,7 +213,7 @@ export default function MarketplaceHostelDetailPage() {
                   onClose={() => setShowCallbackForm(false)}
                   onSuccess={() => {
                     setShowCallbackForm(false);
-                    alert('Callback request submitted successfully! We will call you soon.');
+                    toast.success('Callback request submitted successfully! We will call you soon.');
                   }}
                 />
               </div>

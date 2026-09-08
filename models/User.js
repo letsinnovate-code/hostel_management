@@ -112,13 +112,30 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null,
   },
+  welcomeEmailSent: {
+    type: Boolean,
+    default: false,
+    index: true,
+  },
+  welcomeEmailSentAt: {
+    type: Date,
+  },
 });
 
 userSchema.pre('save', async function (next) {
-  // Normalize role to string (fix legacy data or clients that sent role as array)
-  if (Array.isArray(this.role) && this.role.length > 0) {
-    this.role = this.role[0];
+  // Normalize role to array and ensure currentRole is set
+  if (Array.isArray(this.role)) {
+    if (this.role.length === 0) this.role = ['student'];
+  } else if (typeof this.role === 'string' && this.role) {
+    this.role = [this.role];
+  } else {
+    this.role = ['student'];
   }
+
+  if (!this.currentRole && this.role.length > 0) {
+    this.currentRole = this.role[0];
+  }
+
   if (!this.isModified('password')) {
     return next();
   }

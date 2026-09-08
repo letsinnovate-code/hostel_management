@@ -32,13 +32,16 @@ async function logGateEvent(opts) {
   const t = time instanceof Date ? time : new Date(time);
   const windowStart = new Date(t.getTime() - DEDUPE_WINDOW_MS);
 
-  const existing = await GateEvent.findOne({
-    studentId,
-    hostelId,
-    type,
-    time: { $gte: windowStart, $lte: new Date(t.getTime() + 1000) },
-  }).lean();
+  const dedupeQuery = attendanceId
+    ? { attendanceId, type }
+    : {
+        studentId,
+        hostelId,
+        type,
+        time: { $gte: windowStart, $lte: new Date(t.getTime() + 1000) },
+      };
 
+  const existing = await GateEvent.findOne(dedupeQuery).lean();
   if (existing) return;
 
   await GateEvent.create({

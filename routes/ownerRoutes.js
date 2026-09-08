@@ -122,9 +122,9 @@ const multer = require('multer');
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// All routes require authentication and owner role
+// All routes require authentication and owner or superadmin role
 router.use(protect);
-router.use(authorize('owner'));
+router.use(authorize('owner', 'superadmin'));
 
 // Hostel Configuration
 router.post('/hostels', createHostel);
@@ -222,6 +222,7 @@ router.post('/rules/discipline-matrix', createDisciplineMatrix);
 // Geo-Fence
 router.post('/geo-fence', createGeoFence);
 router.get('/hostels/:hostelId/geo-fence', getGeoFences);
+router.get('/geo-fences', getGeoFences);
 router.put('/geo-fence/:id', updateGeoFence);
 
 // Fee Structure

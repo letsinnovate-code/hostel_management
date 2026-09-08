@@ -2,12 +2,25 @@ const http = require('http');
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 // Alert & Automation Module
 const { initAlertModule, shutdownAlertModule } = require('./modules/alert');
 
 // Load env vars
 dotenv.config();
+
+// Fail-fast environment validation for production
+if (process.env.NODE_ENV === 'production') {
+  const requiredEnv = ['JWT_SECRET', 'MONGODB_URI'];
+  const missing = requiredEnv.filter(key => !process.env[key]);
+  if (missing.length > 0) {
+    console.error(`[FATAL] Missing required production environment variables: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+}
 
 // Connect to database
 connectDB();
@@ -33,10 +46,43 @@ app.use((req, res, next) => {
   next();
 });
 
+// Security Headers
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+}));
+
+// CORS Configuration
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:4000'];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+}));
+
 // Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Global API rate limiter (protects against general DDoS)
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many requests, please try again later.' }
+});
+app.use('/api/', apiLimiter);
 
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));
@@ -50,12 +96,25 @@ app.use('/api/superadmin', require('./routes/superadminRoutes'));
 // Hostel Alert & Automation Module routes
 app.use('/api/alerts', require('./modules/alert/routes/alertRoutes'));
 
-// Health check
+// Production-grade Health Check (readiness & liveness)
 app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Hostel Management System API is running',
+  const dbState = mongoose.connection.readyState;
+  const isDbHealthy = dbState === 1;
+  const status = isDbHealthy ? 'healthy' : 'degraded';
+  const statusCode = isDbHealthy ? 200 : 503;
+
+  res.status(statusCode).json({
+    status,
     timestamp: new Date().toISOString(),
+    uptime: Math.floor(process.uptime()),
+    database: {
+      status: isDbHealthy ? 'connected' : (dbState === 2 ? 'connecting' : 'disconnected'),
+      readyState: dbState,
+    },
+    memory: {
+      rss: `${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`,
+      heapUsed: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`,
+    },
   });
 });
 
@@ -217,16 +276,21 @@ app.use((err, req, res, next) => {
   const timestamp = new Date().toISOString();
   const method = req.method;
   const url = req.originalUrl || req.url;
-  
+
   console.error(`[${timestamp}] ERROR ${method} ${url}:`, {
     message: err.message,
-    stack: err.stack,
+    stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
     statusCode: err.statusCode || 500,
   });
-  
-  res.status(err.statusCode || 500).json({
+
+  const statusCode = err.statusCode || (err.name === 'ValidationError' ? 400 : 500);
+  const safeMessage = process.env.NODE_ENV === 'production' && statusCode === 500
+    ? 'Internal Server Error'
+    : (err.message || 'Server Error');
+
+  res.status(statusCode).json({
     success: false,
-    message: err.message || 'Server Error',
+    message: safeMessage,
   });
 });
 
@@ -255,18 +319,44 @@ if (!process.env.VERCEL) {
     await initAlertModule(server);
   });
 
-  // Graceful shutdown — stop cron jobs and BullMQ workers cleanly
-  const gracefulShutdown = (signal) => {
+  // Graceful shutdown — stop cron jobs, HTTP server, and database connection cleanly
+  const gracefulShutdown = async (signal) => {
     console.log(`[Server] ${signal} received. Shutting down gracefully...`);
-    shutdownAlertModule();
-    server.close(() => {
-      console.log('[Server] HTTP server closed.');
-      process.exit(0);
-    });
+    try {
+      shutdownAlertModule();
+      server.close(async () => {
+        console.log('[Server] HTTP server closed.');
+        try {
+          await mongoose.connection.close(false);
+          console.log('[Database] MongoDB connection closed cleanly.');
+        } catch (dbErr) {
+          console.error('[Database] Error closing MongoDB connection:', dbErr.message);
+        }
+        process.exit(signal === 'uncaughtException' ? 1 : 0);
+      });
+
+      // Safety timeout if handles remain open
+      setTimeout(() => {
+        console.error('[Server] Forced shutdown after timeout.');
+        process.exit(1);
+      }, 10000).unref();
+    } catch (err) {
+      console.error('[Server] Error during shutdown:', err);
+      process.exit(1);
+    }
   };
+
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('[Process] Unhandled Promise Rejection at:', promise, 'reason:', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('[Process] Uncaught Exception thrown:', err);
+    gracefulShutdown('uncaughtException');
+  });
 }
 
 module.exports = app;
+// Reload trigger for updated warden and curfew routes
 

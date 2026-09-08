@@ -6,6 +6,7 @@ import { useAuth } from '../../../contexts/AuthContext';
 import StudentLayout from '../../../components/StudentLayout';
 import api from '../../../services/api';
 import { UtensilsCrossed, Star, Send } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 export default function StudentMessFeedback() {
   const { user } = useAuth();
@@ -29,6 +30,10 @@ export default function StudentMessFeedback() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (formData.rating === 0) {
+      toast.error('Please select a star rating');
+      return;
+    }
     setSubmitting(true);
     try {
       const parts = [formData.quality, formData.cleanliness, formData.service].filter(Boolean);
@@ -38,7 +43,7 @@ export default function StudentMessFeedback() {
         feedback: feedbackText,
         mealType: formData.mealType,
       });
-      alert('Feedback submitted successfully!');
+      toast.success('Mess feedback submitted successfully!');
       setFormData({
         rating: 0,
         mealType: 'Lunch',
@@ -48,7 +53,7 @@ export default function StudentMessFeedback() {
         comments: '',
       });
     } catch (error: any) {
-      alert(error.message || 'Failed to submit feedback');
+      toast.error(error.message || 'Failed to submit feedback');
     } finally {
       setSubmitting(false);
     }

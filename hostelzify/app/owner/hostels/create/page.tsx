@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../../contexts/AuthContext';
+import { useOwnerHostelOptional } from '../../../../contexts/OwnerHostelContext';
 import api from '../../../../services/api';
 import AddressInput from '../../../../components/AddressInput';
 import { useToast } from '../../../../components/Toast';
@@ -10,6 +11,7 @@ import Link from 'next/link';
 
 export default function CreateHostelPage() {
   const { user } = useAuth();
+  const ownerHostelContext = useOwnerHostelOptional();
   const router = useRouter();
   const { showToast } = useToast();
   const [activeSection, setActiveSection] = useState('basic');
@@ -238,6 +240,12 @@ export default function CreateHostelPage() {
         const formDataImages = new FormData();
         imageFiles.forEach((file) => formDataImages.append('images', file));
         await api.uploadHostelImages(newId, formDataImages);
+      }
+      if (ownerHostelContext) {
+        if (newId) {
+          ownerHostelContext.setSelectedHostel(newId);
+        }
+        await ownerHostelContext.refetchHostels();
       }
       showToast('Hostel created successfully', 'success');
       router.push(`/owner/hostels/${newId}`);

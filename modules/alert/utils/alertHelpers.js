@@ -2,6 +2,7 @@
 'use strict';
 
 const User = require('../../../models/User');
+const Hostel = require('../../../models/Hostel');
 const { ALERT_TYPE_TO_CATEGORY, ALERT_TYPE_PRIORITY, ALERT_PRIORITY } = require('./constants');
 
 // ─────────────────────────────────────────────
@@ -110,13 +111,39 @@ function minutesSince(date) {
  */
 async function getUsersByRoleInHostel(hostelId, roles) {
   const roleArray = Array.isArray(roles) ? roles : [roles];
-  return User.find({
-    hostelId,
-    role: { $in: roleArray },
-    status: 'active',
-  })
-    .select('_id name email pushToken expoPushToken')
-    .lean();
+  
+  // Exclude 'owner' from generic hostelId User.find to prevent any cross-owner leakage
+  const nonOwnerRoles = roleArray.filter((r) => r !== 'owner');
+  let users = [];
+
+  if (nonOwnerRoles.length > 0) {
+    users = await User.find({
+      hostelId,
+      role: { $in: nonOwnerRoles },
+      status: 'active',
+    })
+      .select('_id name email pushToken expoPushToken')
+      .lean();
+  }
+
+  // Authoritative owner resolution: strictly lookup the ownerId recorded on this specific Hostel
+  if (roleArray.includes('owner') || roleArray.includes('all')) {
+    try {
+      const hostel = await Hostel.findById(hostelId).select('ownerId').lean();
+      if (hostel?.ownerId) {
+        const ownerUser = await User.findOne({ _id: hostel.ownerId, status: 'active' })
+          .select('_id name email pushToken expoPushToken')
+          .lean();
+        if (ownerUser && !users.some((u) => String(u._id) === String(ownerUser._id))) {
+          users.push(ownerUser);
+        }
+      }
+    } catch (e) {
+      console.warn('[AlertHelpers] Failed to resolve owner for hostel:', hostelId, e.message);
+    }
+  }
+
+  return users;
 }
 
 /**

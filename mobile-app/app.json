@@ -32,7 +32,8 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
@@ -65,19 +66,21 @@
           "isAndroidForegroundServiceEnabled": true
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-font",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
     "extra": {
-      "apiUrl": "https://apihostel-zack.vercel.app/api",
-      "googleMapsApiKey": "AIzaSyAUgTc8tIaS7tS5FECUATUbAHjQSg9BmIA",
+      "apiUrl": "http://localhost:4000/api",
       "router": {},
       "eas": {
-        "projectId": "cc2a2c97-842f-4df3-b90b-f6fba18da342"
+        "projectId": "b71686a6-7361-47b3-a9b9-ad8f736ff35b"
       }
-    }
+    },
+    "owner": "code.ak"
   }
 }

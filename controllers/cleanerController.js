@@ -38,6 +38,11 @@ exports.acceptRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Request is already assigned or closed' });
     }
 
+    const cleaner = await User.findById(req.user.id).select('hostelId blockId').lean();
+    if (complaint.hostelId && cleaner?.hostelId && String(complaint.hostelId) !== String(cleaner.hostelId)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to accept requests from another hostel' });
+    }
+
     complaint.assignedTo = req.user.id;
     complaint.status = 'in-progress'; // OR 'assigned' based on workflow, let's say 'in-progress' means accepted
     complaint.updatedAt = Date.now();
@@ -141,18 +146,24 @@ exports.completeTask = async (req, res) => {
 // Upload Task Images
 exports.uploadTaskImages = async (req, res) => {
   try {
-    const { taskId, imageType } = req.body; // imageType: 'before' or 'after'
+    const { taskId, imageType, imageUrl } = req.body; // imageType: 'before' or 'after'
+    if (!imageUrl || typeof imageUrl !== 'string') {
+      return res.status(400).json({ success: false, message: 'Valid imageUrl string is required' });
+    }
+
     const task = await Task.findById(taskId);
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found' });
     }
+    if (task.assignedTo.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Not authorized' });
+    }
 
-    // In production, handle file uploads with multer
-    // For now, assuming image URLs are passed in req.body
-    const imageUrl = req.body.imageUrl;
     if (imageType === 'before') {
+      task.beforeImages = task.beforeImages || [];
       task.beforeImages.push(imageUrl);
     } else {
+      task.afterImages = task.afterImages || [];
       task.afterImages.push(imageUrl);
     }
     await task.save();
