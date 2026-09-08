@@ -12,18 +12,22 @@ const { initAlertModule, shutdownAlertModule } = require('./modules/alert');
 // Load env vars
 dotenv.config();
 
-// Fail-fast environment validation for production
-if (process.env.NODE_ENV === 'production') {
-  const requiredEnv = ['JWT_SECRET', 'MONGODB_URI'];
-  const missing = requiredEnv.filter(key => !process.env[key]);
-  if (missing.length > 0) {
-    console.error(`[FATAL] Missing required production environment variables: ${missing.join(', ')}`);
+// Environment validation
+const requiredEnv = ['JWT_SECRET', 'MONGODB_URI'];
+const missingEnv = requiredEnv.filter(key => !process.env[key]);
+if (missingEnv.length > 0) {
+  if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
+    console.error(`[FATAL] Missing required production environment variables: ${missingEnv.join(', ')}`);
     process.exit(1);
+  } else {
+    console.warn(`[WARN] Missing recommended environment variables: ${missingEnv.join(', ')}`);
   }
 }
 
-// Connect to database
-connectDB();
+// Connect to database (for standalone server; serverless connects via middleware)
+if (!process.env.VERCEL) {
+  connectDB();
+}
 
 const app = express();
 
@@ -83,6 +87,34 @@ const apiLimiter = rateLimit({
   message: { success: false, message: 'Too many requests, please try again later.' }
 });
 app.use('/api/', apiLimiter);
+
+// Database connection & environment validation middleware (handles Serverless cold starts)
+app.use(async (req, res, next) => {
+  if (req.path === '/' || req.path === '/api/health' || req.path === '/favicon.ico') {
+    return next();
+  }
+
+  if (process.env.VERCEL && missingEnv.length > 0) {
+    return res.status(500).json({
+      success: false,
+      message: `Missing required environment variables on Vercel: ${missingEnv.join(', ')}. Please configure them in Vercel Project Settings > Environment Variables.`,
+    });
+  }
+
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      await connectDB();
+    }
+    next();
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to connect to MongoDB database.',
+      error: err.message,
+      hint: 'Verify MONGODB_URI in Vercel settings and ensure MongoDB Atlas Network Access allows 0.0.0.0/0 (Allow access from anywhere).'
+    });
+  }
+});
 
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));
