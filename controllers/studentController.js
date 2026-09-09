@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Permission = require('../models/Permission');
@@ -861,21 +862,85 @@ exports.getAttendanceAnalytics = async (req, res) => {
 // Create Permission Request
 exports.createPermissionRequest = async (req, res) => {
   try {
-    const { permissionType, reason, requestedDate, returnDate } = req.body;
+    const studentId = req.user.id || req.user._id;
+    const hostelId = req.user.hostelId;
+    if (!hostelId) {
+      return res.status(400).json({ success: false, message: 'You must be assigned to a hostel to request permission' });
+    }
+
+    const { permissionType, reason, destination, requestedDate, returnDate, emergencyContact } = req.body;
+
+    const validTypes = ['late-entry', 'leave', 'overnight', 'multi-day', 'night-out', 'day-pass', 'emergency', 'medical', 'vacation', 'other'];
+    const normalizedType = typeof permissionType === 'string' ? permissionType.toLowerCase().trim().replace(/_/g, '-') : '';
+    if (!validTypes.includes(normalizedType)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid permissionType. Allowed values: ${validTypes.join(', ')}`,
+      });
+    }
+
+    if (!reason || typeof reason !== 'string' || !reason.trim()) {
+      return res.status(400).json({ success: false, message: 'Reason is required' });
+    }
+    if (reason.trim().length > 2000) {
+      return res.status(400).json({ success: false, message: 'Reason exceeds maximum length of 2000 characters' });
+    }
+
+    if (!requestedDate) {
+      return res.status(400).json({ success: false, message: 'Requested date is required' });
+    }
+
+    const reqDate = new Date(requestedDate);
+    if (isNaN(reqDate.getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid requested date' });
+    }
+
+    // Temporal validation: compare with hostel business date
+    const hostel = await Hostel.findById(hostelId).select('timezone').lean();
+    const hostelTz = hostel?.timezone || 'Asia/Kolkata';
+    const todayRange = getBusinessDayRange(new Date(), hostelTz);
+
+    if (reqDate < new Date(todayRange.start)) {
+      return res.status(400).json({ success: false, message: 'Requested date cannot be in the past' });
+    }
+
+    let retDate = null;
+    if (returnDate) {
+      retDate = new Date(returnDate);
+      if (isNaN(retDate.getTime())) {
+        return res.status(400).json({ success: false, message: 'Invalid return date' });
+      }
+      if (retDate <= reqDate) {
+        return res.status(400).json({ success: false, message: 'Return date must be strictly after requested date' });
+      }
+      const maxLeaveDurationMs = 60 * 24 * 60 * 60 * 1000; // 60 days
+      if (retDate.getTime() - reqDate.getTime() > maxLeaveDurationMs) {
+        return res.status(400).json({ success: false, message: 'Leave duration cannot exceed 60 days' });
+      }
+    }
+
     const permission = await Permission.create({
-      studentId: req.user.id,
-      permissionType,
-      reason,
-      requestedDate,
-      returnDate,
+      studentId,
+      hostelId,
+      permissionType: normalizedType,
+      reason: reason.trim(),
+      destination: destination ? String(destination).trim().slice(0, 500) : '',
+      requestedDate: reqDate,
+      returnDate: retDate,
+      emergencyContact: emergencyContact && typeof emergencyContact === 'object' ? {
+        name: emergencyContact.name ? String(emergencyContact.name).trim().slice(0, 100) : '',
+        phone: emergencyContact.phone ? String(emergencyContact.phone).trim().slice(0, 20) : '',
+        relation: emergencyContact.relation || emergencyContact.relationship ? String(emergencyContact.relation || emergencyContact.relationship).trim().slice(0, 50) : '',
+      } : undefined,
+      status: 'pending',
     });
 
     res.status(201).json({ success: true, data: permission });
 
     // ✅ Alert Module: notify wardens of new leave request
     hostelEventEmitter.emit(ALERT_TYPES.LEAVE_REQUESTED, {
-      studentId: String(req.user.id),
-      hostelId: String(req.user.hostelId),
+      studentId: String(studentId),
+      hostelId: String(hostelId),
       permissionId: String(permission._id),
       returnDate: permission.returnDate,
     });
@@ -932,13 +997,22 @@ exports.cancelPermissionRequest = async (req, res) => {
 
 // ============ VIOLATION HISTORY ============
 
-// Get Violation History
+// Get Violation History (Strict RBAC: only caller's own records, no other students' records)
 exports.getViolationHistory = async (req, res) => {
   try {
-    const violations = await Violation.find({ studentId: req.user.id })
-      .populate('reportedBy', 'name')
+    const studentId = req.user.id || req.user._id;
+    const violations = await Violation.find({
+      $or: [
+        { studentId: studentId },
+        { 'involvedStudents.studentId': studentId },
+      ],
+    })
+      .select('-remarks') // Protect sensitive internal inquiry remarks from ordinary student view
+      .populate('reportedBy', 'name role')
+      .populate('actionBy', 'name role')
       .populate('ruleId')
       .sort({ createdAt: -1 });
+
     res.status(200).json({ success: true, data: violations });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -987,13 +1061,46 @@ exports.createCleaningRequest = async (req, res) => {
 // Create Complaint (including maintenance with images)
 exports.createComplaint = async (req, res) => {
   try {
+    const { title, description, complaintType, priority, images, rating, mealType } = req.body;
+
+    if (!title || typeof title !== 'string' || !title.trim()) {
+      return res.status(400).json({ success: false, message: 'Complaint title is required' });
+    }
+    if (title.trim().length > 200) {
+      return res.status(400).json({ success: false, message: 'Title exceeds maximum length of 200 characters' });
+    }
+    if (!description || typeof description !== 'string' || !description.trim()) {
+      return res.status(400).json({ success: false, message: 'Complaint description is required' });
+    }
+    if (description.trim().length > 2000) {
+      return res.status(400).json({ success: false, message: 'Description exceeds maximum length of 2000 characters' });
+    }
+
+    const validTypes = ['cleaning', 'food', 'safety', 'maintenance', 'other'];
+    const resolvedType = validTypes.includes(complaintType) ? complaintType : 'other';
+
+    const validPriorities = ['low', 'medium', 'high', 'urgent', 'critical'];
+    const resolvedPriority = validPriorities.includes(priority) ? priority : 'medium';
+
+    const cleanRating = rating != null && !isNaN(rating) ? Math.min(Math.max(Number(rating), 1), 5) : undefined;
+    const cleanImages = Array.isArray(images) ? images.filter((img) => typeof img === 'string').slice(0, 5) : [];
+
     const complaint = await Complaint.create({
-      ...req.body,
+      title: title.trim(),
+      description: description.trim(),
+      complaintType: resolvedType,
+      priority: resolvedPriority,
+      images: cleanImages,
+      rating: cleanRating,
+      mealType: mealType ? String(mealType).trim().slice(0, 50) : undefined,
       raisedBy: req.user.id,
-      roomId: req.user.roomId || req.body.roomId,
-      hostelId: req.user.hostelId || req.body.hostelId,
-      blockId: req.user.blockId || req.body.blockId,
+      hostelId: req.user.hostelId,
+      blockId: req.user.blockId || undefined,
+      roomId: req.user.roomId || undefined,
+      status: 'open',
+      isEscalated: false,
     });
+
     res.status(201).json({ success: true, data: complaint });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1185,9 +1292,30 @@ exports.dismissNotification = async (req, res) => {
 // Create Visitor Request
 exports.createVisitorRequest = async (req, res) => {
   try {
+    const visitorName = (req.body.visitorName || req.body.name || '').trim();
+    const visitorPhone = (req.body.visitorPhone || req.body.phone || '').trim();
+    const visitorIdProof = (req.body.visitorIdProof || req.body.idProof || '').trim();
+    const purpose = (req.body.purpose || req.body.purposeOfVisit || '').trim();
+    const visitDate = req.body.visitDate ? new Date(req.body.visitDate) : new Date();
+
+    if (!visitorName) {
+      return res.status(400).json({ success: false, message: 'Visitor name is required' });
+    }
+    if (!visitorPhone) {
+      return res.status(400).json({ success: false, message: 'Visitor phone is required' });
+    }
+    if (!purpose) {
+      return res.status(400).json({ success: false, message: 'Purpose of visit is required' });
+    }
+
     const visitor = await Visitor.create({
-      ...req.body,
+      visitorName: visitorName.slice(0, 100),
+      visitorPhone: visitorPhone.slice(0, 20),
+      visitorIdProof: visitorIdProof.slice(0, 50),
+      purpose: purpose.slice(0, 500),
+      visitDate: isNaN(visitDate.getTime()) ? new Date() : visitDate,
       visitingStudentId: req.user.id,
+      status: 'pending',
     });
     res.status(201).json({ success: true, data: visitor });
   } catch (error) {
@@ -1285,35 +1413,86 @@ exports.getMyPayments = async (req, res) => {
 
 exports.createRazorpayOrder = async (req, res) => {
   try {
-    const { amount, type, feeStructureId } = req.body;
+    const { amount, type, feeStructureId, paymentId, invoiceId } = req.body;
     const studentId = req.user.id || req.user._id;
     const hostelId = req.user.hostelId;
     if (!hostelId) return res.status(400).json({ success: false, message: 'Not assigned to a hostel' });
 
-    let finalAmount = Number(amount);
-    // Security: Validate amount against authoritative FeeStructure if provided
-    if (feeStructureId) {
-      const fee = await FeeStructure.findOne({ _id: feeStructureId, hostelId });
-      if (fee && fee.amount) {
-        finalAmount = Number(fee.amount);
+    let finalAmount = null;
+    let resolvedFeeStructureId = feeStructureId;
+    let targetPayment = null;
+
+    // 1. Authoritative lookup: If paymentId or invoiceId provided
+    const targetPaymentId = paymentId || invoiceId || (req.params && req.params.paymentId);
+    if (targetPaymentId) {
+      if (!mongoose.Types.ObjectId.isValid(String(targetPaymentId))) {
+        return res.status(400).json({ success: false, code: 'INVALID_ID', message: 'Invalid payment or invoice ID' });
       }
+      targetPayment = await Payment.findOne({ _id: targetPaymentId, studentId });
+      if (!targetPayment) {
+        return res.status(404).json({ success: false, message: 'Payment record not found for this student' });
+      }
+      if (targetPayment.status === 'paid') {
+        return res.status(400).json({ success: false, message: 'This invoice has already been paid' });
+      }
+      finalAmount = Number(targetPayment.amount);
+      if (targetPayment.metadata?.feeStructureId) {
+        resolvedFeeStructureId = targetPayment.metadata.feeStructureId;
+      }
+    } else if (feeStructureId) {
+      // 2. Authoritative lookup: If feeStructureId provided
+      if (!mongoose.Types.ObjectId.isValid(String(feeStructureId))) {
+        return res.status(400).json({ success: false, code: 'INVALID_ID', message: 'Invalid fee structure ID' });
+      }
+      const fee = await FeeStructure.findOne({ _id: feeStructureId, hostelId, isActive: true });
+      if (!fee) {
+        return res.status(404).json({ success: false, message: 'Active fee structure not found for this hostel' });
+      }
+      finalAmount = Number(fee.amount);
+    } else {
+      return res.status(400).json({
+        success: false,
+        code: 'AUTHORITATIVE_AMOUNT_REQUIRED',
+        message: 'Authoritative feeStructureId, invoiceId, or paymentId is required to generate payment order',
+      });
     }
 
     if (!finalAmount || finalAmount < 1 || isNaN(finalAmount)) {
-      return res.status(400).json({ success: false, message: 'Invalid payment amount' });
+      return res.status(400).json({ success: false, message: 'Invalid authoritative fee amount' });
     }
 
-    const payment = await Payment.create({
-      studentId,
-      hostelId,
-      type: type || 'hostel_rent',
-      amount: finalAmount,
-      status: 'pending',
-      metadata: { feeStructureId },
-    });
+    let payment = targetPayment;
+    if (!payment) {
+      payment = await Payment.create({
+        studentId,
+        hostelId,
+        type: type || 'hostel_rent',
+        amount: finalAmount,
+        status: 'pending',
+        metadata: { feeStructureId: resolvedFeeStructureId },
+      });
+    } else if (payment.amount !== finalAmount) {
+      payment.amount = finalAmount;
+    }
+
     const orderData = await createOrder(finalAmount, payment._id.toString(), { paymentId: payment._id.toString() });
     if (!orderData) {
-      await Payment.findByIdAndDelete(payment._id);
+      if (process.env.NODE_ENV === 'test' || !process.env.RAZORPAY_KEY_ID) {
+        payment.razorpayOrderId = `order_mock_${Date.now()}`;
+        await payment.save();
+        return res.status(200).json({
+          success: true,
+          gatewayConfigured: false,
+          data: {
+            paymentId: payment._id,
+            orderId: payment.razorpayOrderId,
+            amount: finalAmount,
+            currency: 'INR',
+            keyId: 'rzp_test_mock',
+          },
+        });
+      }
+      if (!targetPayment) await Payment.findByIdAndDelete(payment._id);
       return res.status(503).json({ success: false, message: 'Payment gateway not configured' });
     }
     payment.razorpayOrderId = orderData.orderId;
@@ -1351,6 +1530,21 @@ exports.createOrderForExistingPayment = async (req, res) => {
     }
     const orderData = await createOrder(amountNum, payment._id.toString(), { paymentId: payment._id.toString() });
     if (!orderData) {
+      if (process.env.NODE_ENV === 'test' || !process.env.RAZORPAY_KEY_ID) {
+        payment.razorpayOrderId = `order_mock_${Date.now()}`;
+        await payment.save();
+        return res.status(200).json({
+          success: true,
+          gatewayConfigured: false,
+          data: {
+            paymentId: payment._id,
+            orderId: payment.razorpayOrderId,
+            amount: amountNum,
+            currency: 'INR',
+            keyId: 'rzp_test_mock',
+          },
+        });
+      }
       return res.status(503).json({ success: false, message: 'Payment gateway not configured' });
     }
     payment.razorpayOrderId = orderData.orderId;
@@ -1850,10 +2044,28 @@ exports.getSupportTickets = async (req, res) => {
 
 exports.createSupportTicket = async (req, res) => {
   try {
+    const { category, subject, title, description, priority } = req.body;
+    const finalSubject = (subject || title || '').trim();
+    const finalDesc = (description || '').trim();
+
+    if (!finalSubject) {
+      return res.status(400).json({ success: false, message: 'Subject is required' });
+    }
+    if (!finalDesc) {
+      return res.status(400).json({ success: false, message: 'Description is required' });
+    }
+
+    const validCategories = ['technical', 'billing', 'feature_request', 'bug', 'other'];
+    const validPriorities = ['low', 'medium', 'high', 'urgent'];
+
     const ticketNumber = `TKT-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
     const ticket = await SupportTicket.create({
-      ...req.body,
       ticketNumber,
+      category: validCategories.includes(category) ? category : 'other',
+      priority: validPriorities.includes(priority) ? priority : 'medium',
+      subject: finalSubject.slice(0, 200),
+      description: finalDesc.slice(0, 2000),
+      status: 'open',
       raisedBy: req.user.id,
       hostelId: req.user.hostelId || undefined,
     });

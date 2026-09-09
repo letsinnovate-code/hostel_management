@@ -19,6 +19,7 @@ import {
   X,
   Zap,
   CreditCard,
+  UserCheck,
 } from 'lucide-react';
 
 interface StudentSidebarProps {
@@ -56,6 +57,12 @@ export default function StudentSidebar({ isOpen, onClose }: StudentSidebarProps)
       icon: Home,
       href: '/student/dashboard',
       color: '#0a7ea4',
+    },
+    {
+      title: 'Hostel Onboarding',
+      icon: UserCheck,
+      href: '/student/onboarding',
+      color: '#6366F1',
     },
     {
       title: 'Housing & Cleaning',

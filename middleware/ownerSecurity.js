@@ -45,10 +45,17 @@ async function assertOwnsHostel(req, hostelId) {
     err.statusCode = 404;
     throw err;
   }
-  if (req.user?.role === 'superadmin') {
+  const userRole = req.user?.role;
+  const userRoles = Array.isArray(userRole)
+    ? userRole
+    : (req.user?.roles && Array.isArray(req.user.roles) ? [userRole, ...req.user.roles] : [userRole]);
+  const isSuperadmin = userRoles.includes('superadmin');
+  const isWarden = userRoles.includes('warden') || userRoles.includes('supervisor');
+
+  if (isSuperadmin) {
     return hostel;
   }
-  if (req.user?.role === 'warden') {
+  if (isWarden) {
     const wardenHostelId = req.user?.hostelId || req.user?.hostel;
     if (String(wardenHostelId) === String(hostelId)) {
       return hostel;

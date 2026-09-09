@@ -146,6 +146,8 @@ app.use('/api/security', require('./routes/securityRoutes'));
 app.use('/api/superadmin', require('./routes/superadminRoutes'));
 // Hostel Alert & Automation Module routes
 app.use('/api/alerts', require('./modules/alert/routes/alertRoutes'));
+// Student Onboarding & Verification Module routes
+app.use('/api/onboarding', require('./routes/onboardingRoutes'));
 
 // Production-grade Health Check (readiness & liveness)
 app.get('/api/health', (req, res) => {
@@ -318,6 +320,7 @@ app.get('/', (req, res) => {
       warden: '/api/warden',
       cleaner: '/api/cleaner',
       student: '/api/student',
+      onboarding: '/api/onboarding',
     },
   });
 });
@@ -329,18 +332,72 @@ app.use((err, req, res, next) => {
   const url = req.originalUrl || req.url;
 
   console.error(`[${timestamp}] ERROR ${method} ${url}:`, {
+    name: err.name,
+    code: err.code,
     message: err.message,
     stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
-    statusCode: err.statusCode || 500,
+    statusCode: err.statusCode,
   });
 
-  const statusCode = err.statusCode || (err.name === 'ValidationError' ? 400 : 500);
+  // Mongoose CastError (invalid ObjectId / invalid type cast) -> 400 Bad Request
+  if (err.name === 'CastError') {
+    return res.status(400).json({
+      success: false,
+      code: 'INVALID_ID',
+      message: `Invalid identifier format for field '${err.path}'`,
+    });
+  }
+
+  // MongoDB Duplicate Key Error -> 409 Conflict
+  if (err.code === 11000 || (err.name === 'MongoServerError' && err.code === 11000)) {
+    const field = err.keyValue ? Object.keys(err.keyValue)[0] : 'resource';
+    return res.status(409).json({
+      success: false,
+      code: 'DUPLICATE_RESOURCE',
+      message: `A record with this ${field} already exists.`,
+    });
+  }
+
+  // Mongoose Schema Validation Error -> 400 Bad Request
+  if (err.name === 'ValidationError') {
+    const errorDetails = err.errors
+      ? Object.values(err.errors).map((e) => ({ field: e.path, message: e.message }))
+      : [];
+    return res.status(400).json({
+      success: false,
+      code: 'VALIDATION_ERROR',
+      message: err.message || 'Validation failed',
+      errors: errorDetails.length > 0 ? errorDetails : undefined,
+    });
+  }
+
+  // Multer Errors (e.g. file size exceeded) -> 413 or 400
+  if (err.name === 'MulterError') {
+    const statusCode = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    return res.status(statusCode).json({
+      success: false,
+      code: err.code || 'FILE_UPLOAD_ERROR',
+      message: err.message || 'File upload error',
+    });
+  }
+
+  // JWT Verification Errors
+  if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+    return res.status(401).json({
+      success: false,
+      code: 'UNAUTHORIZED',
+      message: 'Invalid or expired authentication token',
+    });
+  }
+
+  const statusCode = err.statusCode || 500;
   const safeMessage = process.env.NODE_ENV === 'production' && statusCode === 500
     ? 'Internal Server Error'
     : (err.message || 'Server Error');
 
   res.status(statusCode).json({
     success: false,
+    code: err.code || (statusCode === 500 ? 'INTERNAL_SERVER_ERROR' : 'REQUEST_ERROR'),
     message: safeMessage,
   });
 });

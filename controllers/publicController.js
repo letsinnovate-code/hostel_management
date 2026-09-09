@@ -117,6 +117,16 @@ exports.createEnquiry = async (req, res) => {
         message: 'Hostel ID, name, email, and phone are required',
       });
     }
+
+    const trimmedName = String(name).trim().slice(0, 100);
+    const trimmedEmail = String(email).toLowerCase().trim().slice(0, 100);
+    const trimmedPhone = String(phone).trim().slice(0, 20);
+    const trimmedMessage = message ? String(message).trim().slice(0, 2000) : '';
+
+    const rfcEmailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+    if (!rfcEmailRegex.test(trimmedEmail)) {
+      return res.status(400).json({ success: false, message: 'Please provide a valid email address' });
+    }
     
     // Verify hostel exists
     const hostel = await Hostel.findById(hostelId);
@@ -126,10 +136,10 @@ exports.createEnquiry = async (req, res) => {
     
     const enquiry = await Enquiry.create({
       hostelId,
-      name,
-      email,
-      phone,
-      message: message || '',
+      name: trimmedName,
+      email: trimmedEmail,
+      phone: trimmedPhone,
+      message: trimmedMessage,
       status: 'pending',
     });
     
@@ -155,6 +165,10 @@ exports.createCallbackRequest = async (req, res) => {
         message: 'Hostel ID, name, and phone are required',
       });
     }
+
+    const trimmedName = String(name).trim().slice(0, 100);
+    const trimmedPhone = String(phone).trim().slice(0, 20);
+    const trimmedTime = preferredTime ? String(preferredTime).trim().slice(0, 100) : 'anytime';
     
     // Verify hostel exists
     const hostel = await Hostel.findById(hostelId);
@@ -164,9 +178,9 @@ exports.createCallbackRequest = async (req, res) => {
     
     const callbackRequest = await CallbackRequest.create({
       hostelId,
-      name,
-      phone,
-      preferredTime: preferredTime || 'anytime',
+      name: trimmedName,
+      phone: trimmedPhone,
+      preferredTime: trimmedTime,
       status: 'pending',
     });
     

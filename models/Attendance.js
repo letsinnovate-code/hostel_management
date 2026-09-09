@@ -14,8 +14,36 @@ const attendanceSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['inside', 'outside', 'pending', 'on-leave'],
+    enum: ['inside', 'outside', 'pending', 'on-leave', 'present', 'absent', 'late'],
     required: true,
+  },
+  attendanceStatus: {
+    type: String,
+    enum: ['present', 'absent', 'late', 'on-leave', 'pending'],
+    default: 'present',
+  },
+  isLate: {
+    type: Boolean,
+    default: false,
+  },
+  remarks: {
+    type: String,
+    default: '',
+    trim: true,
+  },
+  markedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+  },
+  lastEditedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+  },
+  lastEditedAt: Date,
+  editReason: {
+    type: String,
+    default: '',
+    trim: true,
   },
   checkInTime: Date,
   checkOutTime: Date,
@@ -79,6 +107,8 @@ attendanceSchema.index({ studentId: 1, checkInTime: -1 });
 attendanceSchema.index({ hostelId: 1, date: -1 });
 attendanceSchema.index({ hostelId: 1, status: 1 });
 attendanceSchema.index({ studentId: 1, businessDate: 1 });
+attendanceSchema.index({ hostelId: 1, businessDate: 1 });
+attendanceSchema.index({ studentId: 1, attendanceStatus: 1 });
 
 module.exports = mongoose.model('Attendance', attendanceSchema);
 

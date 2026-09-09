@@ -556,10 +556,75 @@ class ApiService {
     return response.data;
   }
 
+  // Leave & Permission Management APIs
+  async getWardenLeaves(params?: {
+    search?: string;
+    status?: string;
+    permissionType?: string;
+    startDate?: string;
+    endDate?: string;
+    floor?: string | number;
+    room?: string;
+    sortBy?: string;
+    sortOrder?: string;
+    page?: number;
+    limit?: number;
+    hostelId?: string;
+  }) {
+    const response = await this.api.get('/warden/leaves', { params });
+    return response.data;
+  }
+
+  async getWardenCurrentlyAbsent(params?: { hostelId?: string }) {
+    const response = await this.api.get('/warden/leaves/currently-absent', { params });
+    return response.data;
+  }
+
+  async getWardenOverdueLeaves(params?: { hostelId?: string }) {
+    const response = await this.api.get('/warden/leaves/overdue', { params });
+    return response.data;
+  }
+
+  async approveWardenLeave(id: string, data?: { wardenRemarks?: string }) {
+    const response = await this.api.post(`/warden/leaves/${id}/approve`, data);
+    return response.data;
+  }
+
+  async rejectWardenLeave(id: string, data: { rejectionReason: string; wardenRemarks?: string }) {
+    const response = await this.api.post(`/warden/leaves/${id}/reject`, data);
+    return response.data;
+  }
+
+  async cancelWardenLeave(id: string, data: { cancellationReason: string }) {
+    const response = await this.api.post(`/warden/leaves/${id}/cancel`, data);
+    return response.data;
+  }
+
+  async recordWardenLeaveCheckOut(id: string, data?: { actualCheckOutTime?: string; remarks?: string }) {
+    const response = await this.api.post(`/warden/leaves/${id}/checkout`, data);
+    return response.data;
+  }
+
+  async recordWardenLeaveReturn(id: string, data?: { actualReturnTime?: string; remarks?: string }) {
+    const response = await this.api.post(`/warden/leaves/${id}/return`, data);
+    return response.data;
+  }
+
+  async getWardenStudentLeaveHistory(studentId: string, params?: { hostelId?: string }) {
+    const response = await this.api.get(`/warden/leaves/student/${studentId}`, { params });
+    return response.data;
+  }
+
+  async updateWardenLeaveRemarks(id: string, data: { wardenRemarks: string }) {
+    const response = await this.api.put(`/warden/leaves/${id}/remarks`, data);
+    return response.data;
+  }
+
   async getPendingPermissions() {
     const response = await this.api.get('/warden/permissions/pending');
     return response.data;
   }
+
 
   async approvePermission(permissionId: string) {
     const response = await this.api.post(`/warden/permissions/${permissionId}/approve`);
@@ -576,8 +641,13 @@ class ApiService {
     return response.data;
   }
 
-  async getViolations() {
-    const response = await this.api.get('/warden/violations');
+  async getViolations(params?: any) {
+    const response = await this.api.get('/warden/violations', { params });
+    return response.data;
+  }
+
+  async getViolationDetails(id: string) {
+    const response = await this.api.get(`/warden/violations/${id}`);
     return response.data;
   }
 
@@ -591,7 +661,27 @@ class ApiService {
     return response.data;
   }
 
-  async escalateViolation(id: string, data: { escalateTo: string }) {
+  async recordDisciplinaryAction(id: string, data: { actionTaken: string; actionDetails?: string; warningLevel?: string; fineAmount?: number }) {
+    const response = await this.api.post(`/warden/violations/${id}/action`, data);
+    return response.data;
+  }
+
+  async recordParentNotification(id: string, data: { method: string; parentContactInfo?: string; notes?: string }) {
+    const response = await this.api.post(`/warden/violations/${id}/parent-notify`, data);
+    return response.data;
+  }
+
+  async addViolationRemark(id: string, data: { comment: string }) {
+    const response = await this.api.post(`/warden/violations/${id}/remarks`, data);
+    return response.data;
+  }
+
+  async resolveViolation(id: string, data: { resolutionNotes: string }) {
+    const response = await this.api.post(`/warden/violations/${id}/resolve`, data);
+    return response.data;
+  }
+
+  async escalateViolation(id: string, data: { escalateTo: string; reason?: string }) {
     const response = await this.api.post(`/warden/violations/${id}/escalate`, data);
     return response.data;
   }
@@ -733,6 +823,99 @@ class ApiService {
     return response.data;
   }
 
+  // Attendance Management APIs
+  async getWardenAttendanceSheet(params?: {
+    date?: string;
+    search?: string;
+    roomId?: string;
+    floor?: number | string;
+    course?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+    hostelId?: string;
+  }) {
+    const response = await this.api.get('/warden/attendance/sheet', { params });
+    return response.data;
+  }
+
+  async markWardenSingleAttendance(data: {
+    studentId: string;
+    attendanceStatus: 'present' | 'absent' | 'late' | 'on-leave';
+    isLate?: boolean;
+    remarks?: string;
+    date?: string;
+    editReason?: string;
+  }) {
+    const response = await this.api.post('/warden/attendance/mark-single', data);
+    return response.data;
+  }
+
+  async bulkMarkWardenAttendance(data: {
+    records: Array<{
+      studentId: string;
+      attendanceStatus: 'present' | 'absent' | 'late' | 'on-leave';
+      isLate?: boolean;
+      remarks?: string;
+    }>;
+    date?: string;
+    editReason?: string;
+  }) {
+    const response = await this.api.post('/warden/attendance/bulk-mark', data);
+    return response.data;
+  }
+
+  async editWardenAttendanceRecord(
+    attendanceId: string,
+    data: {
+      attendanceStatus?: 'present' | 'absent' | 'late' | 'on-leave';
+      isLate?: boolean;
+      remarks?: string;
+      editReason: string;
+    }
+  ) {
+    const response = await this.api.put(`/warden/attendance/${attendanceId}/edit`, data);
+    return response.data;
+  }
+
+  async getWardenAttendanceAnalytics(params?: {
+    days?: number;
+    threshold?: number;
+    lowPercentageThreshold?: number;
+    hostelId?: string;
+  }) {
+    const response = await this.api.get('/warden/attendance/analytics', { params });
+    return response.data;
+  }
+
+  async getWardenStudentAttendanceHistory(studentId: string, params?: {
+    startDate?: string;
+    endDate?: string;
+    page?: number;
+    limit?: number;
+    hostelId?: string;
+  }) {
+    const response = await this.api.get(`/warden/attendance/student/${studentId}`, { params });
+    return response.data;
+  }
+
+  async exportWardenAttendanceCSV(params?: {
+    date?: string;
+    startDate?: string;
+    endDate?: string;
+    roomId?: string;
+    floor?: number | string;
+    course?: string;
+    status?: string;
+    hostelId?: string;
+  }) {
+    const response = await this.api.get('/warden/attendance/export', {
+      params,
+      responseType: 'blob',
+    });
+    return response.data;
+  }
+
   async createWardenVisitor(data: {
     visitorName: string;
     visitorPhone: string;
@@ -772,13 +955,77 @@ class ApiService {
     return response.data;
   }
 
-  async getWardenComplaints(params?: { status?: string; type?: string; priority?: string }) {
+  async getWardenComplaints(params?: {
+    status?: string;
+    type?: string;
+    category?: string;
+    priority?: string;
+    search?: string;
+    isEscalated?: boolean | string;
+    startDate?: string;
+    endDate?: string;
+    page?: number;
+    limit?: number;
+    hostelId?: string;
+  }) {
     const response = await this.api.get('/warden/complaints', { params });
     return response.data;
   }
 
-  async updateWardenComplaintStatus(id: string, data: { status?: string; resolutionNotes?: string; assignedTo?: string }) {
+  async getWardenComplaintDetails(id: string) {
+    const response = await this.api.get(`/warden/complaints/${id}`);
+    return response.data;
+  }
+
+  async assignWardenComplaint(
+    id: string,
+    data: {
+      assignedTo?: string;
+      assignedStaffName?: string;
+      assignedStaffPhone?: string;
+      assignedStaffRole?: string;
+      remarks?: string;
+    }
+  ) {
+    const response = await this.api.post(`/warden/complaints/${id}/assign`, data);
+    return response.data;
+  }
+
+  async updateWardenComplaintStatus(
+    id: string,
+    data: {
+      status?: string;
+      resolutionNotes?: string;
+      remarks?: string;
+      assignedTo?: string;
+    }
+  ) {
     const response = await this.api.put(`/warden/complaints/${id}/status`, data);
+    return response.data;
+  }
+
+  async resolveWardenComplaint(id: string, data: { resolutionNotes: string; remarks?: string }) {
+    const response = await this.api.post(`/warden/complaints/${id}/resolve`, data);
+    return response.data;
+  }
+
+  async reopenWardenComplaint(id: string, data: { reopenReason: string; remarks?: string }) {
+    const response = await this.api.post(`/warden/complaints/${id}/reopen`, data);
+    return response.data;
+  }
+
+  async addWardenComplaintRemark(id: string, data: { comment: string }) {
+    const response = await this.api.post(`/warden/complaints/${id}/remarks`, data);
+    return response.data;
+  }
+
+  async escalateWardenComplaint(id: string, data: { escalateTo?: string; escalationReason: string }) {
+    const response = await this.api.post(`/warden/complaints/${id}/escalate`, data);
+    return response.data;
+  }
+
+  async getWardenHostelStaff(params?: { hostelId?: string }) {
+    const response = await this.api.get('/warden/complaints/staff', { params });
     return response.data;
   }
 
@@ -1249,6 +1496,121 @@ class ApiService {
 
   async createSuperadminOwner(data: { name: string; email: string; password: string; phone: string }) {
     const response = await this.api.post('/superadmin/create-owner', data);
+    return response.data;
+  }
+
+  // ==========================================
+  // STUDENT ONBOARDING APIS
+  // ==========================================
+  async getStudentOnboardingState() {
+    const response = await this.api.get('/onboarding/state');
+    return response.data;
+  }
+
+  async saveOnboardingProfile(data: any) {
+    const response = await this.api.post('/onboarding/profile', data);
+    return response.data;
+  }
+
+  async saveOnboardingContacts(data: any) {
+    const response = await this.api.post('/onboarding/contacts', data);
+    return response.data;
+  }
+
+  async uploadOnboardingDocument(formData: FormData) {
+    const response = await this.api.post('/onboarding/documents', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async resubmitOnboardingDocument(formData: FormData) {
+    const response = await this.api.post('/onboarding/documents/resubmit', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async selectOnboardingHostel(hostelId: string) {
+    const response = await this.api.post('/onboarding/hostel', { hostelId });
+    return response.data;
+  }
+
+  async getAvailableRoomsForOnboarding(params?: { hostelId?: string; floor?: number; roomType?: string }) {
+    const response = await this.api.get('/onboarding/available-rooms', { params });
+    return response.data;
+  }
+
+  async getOnboardingFeeBreakdown() {
+    const response = await this.api.get('/onboarding/fee-breakdown');
+    return response.data;
+  }
+
+  async initiateOnboardingPayment(data: { method: string; amount?: number; notes?: string }) {
+    const response = await this.api.post('/onboarding/payment/initiate', data);
+    return response.data;
+  }
+
+  async verifyOnboardingPayment(data: { razorpay_order_id?: string; razorpay_payment_id?: string; razorpay_signature?: string; offlineReference?: string }) {
+    const response = await this.api.post('/onboarding/payment/verify', data);
+    return response.data;
+  }
+
+  async acceptHostelAgreement(data?: { agreementVersion?: string }) {
+    const response = await this.api.post('/onboarding/agreement', data || {});
+    return response.data;
+  }
+
+  async submitOnboardingFinalReview() {
+    const response = await this.api.post('/onboarding/submit-review');
+    return response.data;
+  }
+
+  // ==========================================
+  // WARDEN & ADMIN ONBOARDING APIS
+  // ==========================================
+  async getWardenOnboardingApplications(params?: { status?: string; search?: string; page?: number; limit?: number }) {
+    const response = await this.api.get('/onboarding/applications', { params });
+    return response.data;
+  }
+
+  async getWardenOnboardingApplicationDetails(applicationId: string) {
+    const response = await this.api.get(`/onboarding/applications/${applicationId}`);
+    return response.data;
+  }
+
+  async verifyWardenDocument(applicationId: string, data: { documentType: string; status: 'approved' | 'rejected' | 'resubmission_required'; rejectionReason?: string; correctionInstructions?: string }) {
+    const response = await this.api.post(`/onboarding/applications/${applicationId}/verify-document`, data);
+    return response.data;
+  }
+
+  async allocateWardenOnboardingRoom(applicationId: string, data: { roomId: string; bedNumber: string }) {
+    const response = await this.api.post(`/onboarding/applications/${applicationId}/allocate-room`, data);
+    return response.data;
+  }
+
+  async confirmWardenOfflineFee(applicationId: string, data: { amountPaid: number; paymentMode?: string; referenceNumber?: string; notes?: string }) {
+    const response = await this.api.post(`/onboarding/applications/${applicationId}/confirm-offline-fee`, data);
+    return response.data;
+  }
+
+  async requestWardenCorrection(applicationId: string, data: { instructions: string; fields?: string[] }) {
+    const response = await this.api.post(`/onboarding/applications/${applicationId}/request-correction`, data);
+    return response.data;
+  }
+
+  async approveWardenOnboardingFinal(applicationId: string, data?: { notes?: string }) {
+    const response = await this.api.post(`/onboarding/applications/${applicationId}/approve`, data || {});
+    return response.data;
+  }
+
+  async rejectWardenOnboarding(applicationId: string, data: { reason: string }) {
+    const response = await this.api.post(`/onboarding/applications/${applicationId}/reject`, data);
+    return response.data;
+  }
+
+  async getOnboardingMetrics(hostelId?: string) {
+    const response = await this.api.get('/onboarding/metrics', { params: hostelId ? { hostelId } : undefined });
     return response.data;
   }
 }

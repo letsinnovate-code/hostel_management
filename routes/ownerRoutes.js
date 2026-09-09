@@ -117,10 +117,34 @@ const {
   getStudentQR,
 } = require('../controllers/ownerController');
 const { protect, authorize } = require('../middleware/auth');
-const multer = require('multer');
+const { createUploadMiddleware } = require('../middleware/uploadValidation');
+const { validateObjectId } = require('../middleware/validator');
 
-const storage = multer.memoryStorage();
-const upload = multer({ storage });
+const imageUpload = createUploadMiddleware({
+  allowedTypes: ['image/jpeg', 'image/png', 'image/webp'],
+  allowedExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+  maxFileSize: 5 * 1024 * 1024,
+  maxFiles: 10,
+});
+
+const documentUpload = createUploadMiddleware({
+  allowedTypes: ['image/jpeg', 'image/png', 'application/pdf'],
+  allowedExtensions: ['.jpg', '.jpeg', '.png', '.pdf'],
+  maxFileSize: 5 * 1024 * 1024,
+  maxFiles: 10,
+});
+
+const excelUpload = createUploadMiddleware({
+  allowedTypes: [
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'text/csv',
+    'application/octet-stream',
+  ],
+  allowedExtensions: ['.xlsx', '.xls', '.csv'],
+  maxFileSize: 10 * 1024 * 1024,
+  maxFiles: 1,
+});
 
 // All routes require authentication
 router.use(protect);
@@ -134,61 +158,61 @@ router.use(authorize('owner', 'superadmin'));
 // Hostel Configuration
 router.post('/hostels', createHostel);
 router.get('/hostels', getHostels);
-router.get('/hostels/:id', getHostel);
-router.put('/hostels/:id', updateHostel);
-router.delete('/hostels/:id', deleteHostel);
+router.get('/hostels/:id', validateObjectId('id'), getHostel);
+router.put('/hostels/:id', validateObjectId('id'), updateHostel);
+router.delete('/hostels/:id', validateObjectId('id'), deleteHostel);
 router.post('/geocode', geocodeAddressEndpoint);
-router.post('/hostels/:hostelId/images', upload.array('images', 10), uploadHostelImages);
-router.delete('/hostels/:hostelId/images/:imageUrl', deleteHostelImage);
-router.put('/hostels/:hostelId/cover-image', setCoverImage);
+router.post('/hostels/:hostelId/images', validateObjectId('hostelId'), imageUpload.array('images', 10), uploadHostelImages);
+router.delete('/hostels/:hostelId/images/:imageUrl', validateObjectId('hostelId'), deleteHostelImage);
+router.put('/hostels/:hostelId/cover-image', validateObjectId('hostelId'), setCoverImage);
 
 // Block Management
 router.post('/blocks', createBlock);
-router.get('/hostels/:hostelId/blocks', getBlocks);
+router.get('/hostels/:hostelId/blocks', validateObjectId('hostelId'), getBlocks);
 
 // Room Management
 router.post('/rooms', createRoom);
 router.get('/rooms', getRooms); // Get all rooms (with optional query params: hostelId, blockId, status, category)
-router.get('/blocks/:blockId/rooms', getRooms); // Get rooms by block (backward compatibility)
-router.get('/rooms/:id', getRoom);
-router.put('/rooms/:id', updateRoom);
-router.delete('/rooms/:id', deleteRoom);
-router.post('/rooms/:roomId/images', upload.array('images', 10), uploadRoomImages);
-router.delete('/rooms/:roomId/images/:imageUrl', deleteRoomImage);
-router.put('/rooms/:roomId/cover-image', setRoomCoverImage);
+router.get('/blocks/:blockId/rooms', validateObjectId('blockId'), getRooms); // Get rooms by block (backward compatibility)
+router.get('/rooms/:id', validateObjectId('id'), getRoom);
+router.put('/rooms/:id', validateObjectId('id'), updateRoom);
+router.delete('/rooms/:id', validateObjectId('id'), deleteRoom);
+router.post('/rooms/:roomId/images', validateObjectId('roomId'), imageUpload.array('images', 10), uploadRoomImages);
+router.delete('/rooms/:roomId/images/:imageUrl', validateObjectId('roomId'), deleteRoomImage);
+router.put('/rooms/:roomId/cover-image', validateObjectId('roomId'), setRoomCoverImage);
 
 // Amenity Management
 router.post('/amenities', createAmenity);
 router.get('/amenities', getAmenities); // Get all amenities (with optional query params: hostelId, category, isAvailable)
-router.get('/amenities/:id', getAmenity);
-router.put('/amenities/:id', updateAmenity);
-router.delete('/amenities/:id', deleteAmenity);
-router.post('/amenities/:amenityId/images', upload.array('images', 10), uploadAmenityImages);
-router.delete('/amenities/:amenityId/images/:imageUrl', deleteAmenityImage);
+router.get('/amenities/:id', validateObjectId('id'), getAmenity);
+router.put('/amenities/:id', validateObjectId('id'), updateAmenity);
+router.delete('/amenities/:id', validateObjectId('id'), deleteAmenity);
+router.post('/amenities/:amenityId/images', validateObjectId('amenityId'), imageUpload.array('images', 10), uploadAmenityImages);
+router.delete('/amenities/:amenityId/images/:imageUrl', validateObjectId('amenityId'), deleteAmenityImage);
 
 // Rule Engine
 router.post('/rules', createRule);
 router.get('/rules', getRules); // Get all rules (with optional hostelId query param)
-router.get('/hostels/:hostelId/rules', getRules); // Get rules by hostel (backward compatibility)
-router.put('/rules/:id', updateRule);
-router.delete('/rules/:id', deleteRule);
+router.get('/hostels/:hostelId/rules', validateObjectId('hostelId'), getRules); // Get rules by hostel (backward compatibility)
+router.put('/rules/:id', validateObjectId('id'), updateRule);
+router.delete('/rules/:id', validateObjectId('id'), deleteRule);
 
 // User Management
 router.post('/users', createUser);
 router.get('/users', getUsers);
-router.get('/users/:id', getUser);
-router.put('/users/:id', updateUser);
-router.delete('/users/:id', deleteUser);
+router.get('/users/:id', validateObjectId('id'), getUser);
+router.put('/users/:id', validateObjectId('id'), updateUser);
+router.delete('/users/:id', validateObjectId('id'), deleteUser);
 
 // Student Lifecycle
 // NOTE: specific routes must come BEFORE /:id param routes
 router.get('/students/registration-invite-qr', generateRegistrationInviteQR);
 router.get('/students/status/:status', getStudentsByStatus);
-router.post('/students/:id/resend-welcome-email', resendWelcomeEmail);
-router.post('/students/:studentId/profile-image', upload.single('image'), uploadStudentProfileImage);
-router.post('/students/:studentId/documents', upload.array('documents', 10), uploadStudentDocuments);
-router.delete('/students/:studentId/documents/:documentId', deleteStudentDocument);
-router.get('/students/:id/qr', getStudentQR);
+router.post('/students/:id/resend-welcome-email', validateObjectId('id'), resendWelcomeEmail);
+router.post('/students/:studentId/profile-image', validateObjectId('studentId'), imageUpload.single('image'), uploadStudentProfileImage);
+router.post('/students/:studentId/documents', validateObjectId('studentId'), documentUpload.array('documents', 10), uploadStudentDocuments);
+router.delete('/students/:studentId/documents/:documentId', validateObjectId(['studentId', 'documentId']), deleteStudentDocument);
+router.get('/students/:id/qr', validateObjectId('id'), getStudentQR);
 
 // Analytics & Reports
 router.get('/analytics/attendance', getAttendanceTrends);
@@ -226,35 +250,35 @@ router.post('/rules/discipline-matrix', createDisciplineMatrix);
 
 // Geo-Fence
 router.post('/geo-fence', createGeoFence);
-router.get('/hostels/:hostelId/geo-fence', getGeoFences);
+router.get('/hostels/:hostelId/geo-fence', validateObjectId('hostelId'), getGeoFences);
 router.get('/geo-fences', getGeoFences);
-router.put('/geo-fence/:id', updateGeoFence);
+router.put('/geo-fence/:id', validateObjectId('id'), updateGeoFence);
 
 // Fee Structure
 router.post('/fee-structure', createFeeStructure);
-router.get('/hostels/:hostelId/fee-structure', getFeeStructures);
-router.get('/hostels/:hostelId/students/:studentId/applicable-fee', getApplicableFeeForStudent);
+router.get('/hostels/:hostelId/fee-structure', validateObjectId('hostelId'), getFeeStructures);
+router.get('/hostels/:hostelId/students/:studentId/applicable-fee', validateObjectId(['hostelId', 'studentId']), getApplicableFeeForStudent);
 
 // Plans (1/3/6/12 month)
-router.get('/hostels/:hostelId/plans', getPlans);
-router.post('/hostels/:hostelId/plans/seed', seedPlans);
-router.put('/plans/:id', updatePlan);
+router.get('/hostels/:hostelId/plans', validateObjectId('hostelId'), getPlans);
+router.post('/hostels/:hostelId/plans/seed', validateObjectId('hostelId'), seedPlans);
+router.put('/plans/:id', validateObjectId('id'), updatePlan);
 
 // Payments
 router.post('/payments', createPayment);
 router.get('/payments', getPayments);
-router.put('/payments/:id/status', updatePaymentStatus);
-router.delete('/payments/:id', deletePayment);
-router.post('/payments/:id/invoice', generateInvoice);
+router.put('/payments/:id/status', validateObjectId('id'), updatePaymentStatus);
+router.delete('/payments/:id', validateObjectId('id'), deletePayment);
+router.post('/payments/:id/invoice', validateObjectId('id'), generateInvoice);
 
 // Student Management
-router.post('/students/bulk-upload', upload.single('file'), bulkUploadStudents);
-router.post('/students/:id/approve', approveStudentOnboarding);
-router.put('/students/:id/status', updateStudentStatus);
+router.post('/students/bulk-upload', excelUpload.single('file'), bulkUploadStudents);
+router.post('/students/:id/approve', validateObjectId('id'), approveStudentOnboarding);
+router.put('/students/:id/status', validateObjectId('id'), updateStudentStatus);
 
 // Templates
 router.post('/templates', createTemplate);
-router.get('/hostels/:hostelId/templates', getTemplates);
+router.get('/hostels/:hostelId/templates', validateObjectId('hostelId'), getTemplates);
 
 // Analytics & Reporting
 router.get('/dashboard/kpis', getDashboardKPIs);
@@ -280,22 +304,22 @@ router.get('/students/location-permissions', getLocationPermissionStatus);
 
 // Marketplace - Enquiries & Callbacks
 router.get('/enquiries', getEnquiries);
-router.put('/enquiries/:id', updateEnquiryStatus);
+router.put('/enquiries/:id', validateObjectId('id'), updateEnquiryStatus);
 router.get('/callbacks', getCallbackRequests);
-router.put('/callbacks/:id', updateCallbackStatus);
+router.put('/callbacks/:id', validateObjectId('id'), updateCallbackStatus);
 
 // Mess Schedule
-router.get('/hostels/:hostelId/mess', getMessSchedules);
-router.post('/hostels/:hostelId/mess', createMessSchedule);
-router.post('/hostels/:hostelId/mess/seed', seedMessSchedules);
+router.get('/hostels/:hostelId/mess', validateObjectId('hostelId'), getMessSchedules);
+router.post('/hostels/:hostelId/mess', validateObjectId('hostelId'), createMessSchedule);
+router.post('/hostels/:hostelId/mess/seed', validateObjectId('hostelId'), seedMessSchedules);
 router.get('/mess-feedback', getMessFeedback);
 router.get('/leave-requests', getLeaveRequests);
-router.post('/leave-requests/:permissionId/approve', approveLeaveRequest);
-router.post('/leave-requests/:permissionId/reject', rejectLeaveRequest);
+router.post('/leave-requests/:permissionId/approve', validateObjectId('permissionId'), approveLeaveRequest);
+router.post('/leave-requests/:permissionId/reject', validateObjectId('permissionId'), rejectLeaveRequest);
 router.get('/maintenance', getMaintenanceComplaints);
-router.put('/complaints/:id/status', updateComplaintStatus);
-router.put('/hostels/:hostelId/mess/:scheduleId', updateMessSchedule);
-router.delete('/hostels/:hostelId/mess/:scheduleId', deleteMessSchedule);
+router.put('/complaints/:id/status', validateObjectId('id'), updateComplaintStatus);
+router.put('/hostels/:hostelId/mess/:scheduleId', validateObjectId(['hostelId', 'scheduleId']), updateMessSchedule);
+router.delete('/hostels/:hostelId/mess/:scheduleId', validateObjectId(['hostelId', 'scheduleId']), deleteMessSchedule);
 
 module.exports = router;
 

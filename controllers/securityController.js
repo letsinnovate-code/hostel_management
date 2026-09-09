@@ -1,6 +1,21 @@
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Hostel = require('../models/Hostel');
+const { getBusinessDayRange, getBusinessDate } = require('../services/timezoneService');
+
+// Helper: Consistent timezone-aware business day query
+async function getHostelBusinessDateQuery(hostelId) {
+  const hostel = await Hostel.findById(hostelId).select('timezone').lean();
+  const timezone = hostel?.timezone || 'Asia/Kolkata';
+  const range = getBusinessDayRange(new Date(), timezone);
+  const businessDate = getBusinessDate(new Date(), timezone);
+  return {
+    $or: [
+      { date: businessDate },
+      { date: { $gte: range.start, $lte: range.end } },
+    ],
+  };
+}
 
 // Get all checked-in students
 exports.getCheckedInStudents = async (req, res) => {
@@ -10,13 +25,12 @@ exports.getCheckedInStudents = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Hostel assignment required' });
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const dateQuery = await getHostelBusinessDateQuery(hostelId);
 
     const checkedInStudents = await Attendance.find({
       hostelId,
       status: 'inside',
-      date: { $gte: today },
+      ...dateQuery,
     })
       .populate({
         path: 'studentId',
@@ -46,13 +60,12 @@ exports.getCheckedOutStudents = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Hostel assignment required' });
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const dateQuery = await getHostelBusinessDateQuery(hostelId);
 
     const checkedOutStudents = await Attendance.find({
       hostelId,
       status: 'outside',
-      date: { $gte: today },
+      ...dateQuery,
     })
       .populate({
         path: 'studentId',
@@ -82,8 +95,7 @@ exports.getAllStudentsStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Hostel assignment required' });
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const dateQuery = await getHostelBusinessDateQuery(hostelId);
 
     // Get all students in the hostel
     const students = await User.find({
@@ -95,10 +107,10 @@ exports.getAllStudentsStatus = async (req, res) => {
       .populate('roomId', 'roomNumber')
       .populate('blockId', 'blockName');
 
-    // Get today's attendance records
+    // Get today's attendance records using timezone-aware business day
     const attendanceRecords = await Attendance.find({
       hostelId,
-      date: { $gte: today },
+      ...dateQuery,
     })
       .populate('studentId', 'name email phone studentId')
       .sort({ createdAt: -1 });
@@ -159,19 +171,18 @@ exports.getDashboardStats = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Hostel assignment required' });
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const dateQuery = await getHostelBusinessDateQuery(hostelId);
 
     const [checkedIn, checkedOut, totalStudents] = await Promise.all([
       Attendance.countDocuments({
         hostelId,
         status: 'inside',
-        date: { $gte: today },
+        ...dateQuery,
       }),
       Attendance.countDocuments({
         hostelId,
         status: 'outside',
-        date: { $gte: today },
+        ...dateQuery,
       }),
       User.countDocuments({
         hostelId,
@@ -193,4 +204,3 @@ exports.getDashboardStats = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-

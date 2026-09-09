@@ -16,6 +16,10 @@ exports.register = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please provide a valid email and password' });
     }
 
+    if (password.length < 8) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
+    }
+
     const normalizedEmail = email.toLowerCase().trim();
 
     // Security: Restrict role assignment on public registration endpoint
@@ -33,6 +37,9 @@ exports.register = async (req, res) => {
             success: false,
             message: 'Forbidden: Public registration is restricted to students. Staff and owner accounts must be created by an administrator.',
           });
+        }
+        if (requestedRole === 'superadmin' && callerRole !== 'superadmin') {
+          return res.status(403).json({ success: false, message: 'Forbidden: Cannot create superadmin account' });
         }
         assignedRole = requestedRole;
       }

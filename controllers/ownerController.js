@@ -533,8 +533,17 @@ exports.deleteHostel = async (req, res) => {
 // Create Block
 exports.createBlock = async (req, res) => {
   try {
-    await assertOwnsHostel(req, req.body.hostelId);
-    const block = await Block.create(req.body);
+    const { name, hostelId, floors } = req.body;
+    if (!name || !hostelId) {
+      return res.status(400).json({ success: false, message: 'Block name and hostelId are required' });
+    }
+    await assertOwnsHostel(req, hostelId);
+    const blockData = {
+      name: String(name).trim().slice(0, 100),
+      hostelId,
+      floors: Array.isArray(floors) ? floors : [],
+    };
+    const block = await Block.create(blockData);
     res.status(201).json({ success: true, data: block });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message });
@@ -557,12 +566,55 @@ exports.getBlocks = async (req, res) => {
 // Create Room
 exports.createRoom = async (req, res) => {
   try {
-    const { hostelId, ...rest } = req.body;
-    if (!hostelId) {
-      return res.status(400).json({ success: false, message: 'Hostel ID is required' });
+    const {
+      roomNumber,
+      hostelId,
+      blockId,
+      floorNumber,
+      capacity,
+      category,
+      pricing,
+      amenities,
+      images,
+      coverImage,
+      description,
+      status,
+    } = req.body;
+
+    if (!hostelId || !roomNumber) {
+      return res.status(400).json({ success: false, message: 'Hostel ID and roomNumber are required' });
     }
     await assertOwnsHostel(req, hostelId);
-    const room = await Room.create({ ...rest, hostelId });
+
+    if (blockId) {
+      const block = await Block.findById(blockId);
+      if (!block || String(block.hostelId) !== String(hostelId)) {
+        return res.status(400).json({ success: false, message: 'Block does not belong to the specified hostel' });
+      }
+    }
+
+    const roomData = {
+      roomNumber: String(roomNumber).trim().slice(0, 50),
+      hostelId,
+      blockId: blockId || undefined,
+      floorNumber: floorNumber !== undefined ? Number(floorNumber) : 0,
+      capacity: capacity !== undefined ? Math.max(1, Number(capacity)) : 2,
+      currentOccupancy: 0,
+      students: [],
+      category: ['AC', 'Non-AC', 'Deluxe', 'Standard'].includes(category) ? category : 'Standard',
+      status: ['available', 'occupied', 'maintenance', 'unavailable'].includes(status) ? status : 'available',
+      pricing: pricing && typeof pricing === 'object' ? {
+        monthly: Number(pricing.monthly) || 0,
+        yearly: Number(pricing.yearly) || 0,
+        perBed: Number(pricing.perBed) || 0,
+      } : undefined,
+      amenities: Array.isArray(amenities) ? amenities.map(String).slice(0, 50) : [],
+      images: Array.isArray(images) ? images.map(String).slice(0, 20) : [],
+      coverImage: typeof coverImage === 'string' ? coverImage : undefined,
+      description: typeof description === 'string' ? description.trim().slice(0, 2000) : undefined,
+    };
+
+    const room = await Room.create(roomData);
     const populated = await Room.findById(room._id).populate('hostelId', 'name').populate('blockId', 'name');
     res.status(201).json({ success: true, data: populated || room });
   } catch (error) {
@@ -804,11 +856,29 @@ exports.setRoomCoverImage = async (req, res) => {
 // Create Amenity
 exports.createAmenity = async (req, res) => {
   try {
-    if (!req.body.hostelId) {
-      return res.status(400).json({ success: false, message: 'Hostel ID is required' });
+    const { name, hostelId, category, description, isAvailable, quantity, availableQuantity, unit, cost, costType, details, images } = req.body;
+    if (!hostelId || !name || !category) {
+      return res.status(400).json({ success: false, message: 'Hostel ID, name, and category are required' });
     }
-    await assertOwnsHostel(req, req.body.hostelId);
-    const amenity = await Amenity.create(req.body);
+    await assertOwnsHostel(req, hostelId);
+    const validCategories = ['wifi', 'laundry', 'mess', 'parking', 'gym', 'library', 'common-room', 'tv-room', 'study-room', 'security', 'medical', 'sports', 'other'];
+    const finalCategory = validCategories.includes(category) ? category : 'other';
+
+    const amenityData = {
+      name: String(name).trim().slice(0, 100),
+      hostelId,
+      category: finalCategory,
+      description: description ? String(description).trim().slice(0, 2000) : undefined,
+      isAvailable: isAvailable !== undefined ? Boolean(isAvailable) : true,
+      quantity: quantity !== undefined ? Number(quantity) : 1,
+      availableQuantity: availableQuantity !== undefined ? Number(availableQuantity) : 1,
+      unit: ['unit', 'piece', 'room', 'machine', 'slot', 'other'].includes(unit) ? unit : 'unit',
+      cost: cost !== undefined ? Number(cost) : 0,
+      costType: ['free', 'monthly', 'per-use', 'one-time'].includes(costType) ? costType : 'free',
+      details: typeof details === 'object' ? details : {},
+      images: Array.isArray(images) ? images.map(String).slice(0, 10) : [],
+    };
+    const amenity = await Amenity.create(amenityData);
     res.status(201).json({ success: true, data: amenity });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message });
@@ -1098,82 +1168,119 @@ exports.deleteRule = async (req, res) => {
 // Create User (Warden, Cleaner, Supervisor)
 exports.createUser = async (req, res) => {
   try {
-    const userData = { ...req.body };
+    const {
+      name,
+      email,
+      password,
+      role,
+      roles,
+      currentRole,
+      phone,
+      hostelId,
+      blockId,
+      roomId,
+      planId,
+      studentId,
+      address,
+      parentContact,
+      emergencyContact,
+      dateOfBirth,
+      gender,
+      course,
+      year,
+    } = req.body;
 
-    // Normalize role: support multiple roles for staff
-    if (Array.isArray(userData.roles) && userData.roles.length > 0) {
-      const staffRoles = userData.roles.filter((r) => ['warden', 'cleaner', 'supervisor', 'security'].includes(r));
-      if (staffRoles.length > 0) {
-        userData.role = staffRoles;
-        userData.currentRole = userData.currentRole || staffRoles[0];
-      }
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ success: false, message: 'Name is required' });
     }
-    if (Array.isArray(userData.role) && userData.role.length > 0 && !userData.currentRole) {
-      userData.currentRole = userData.role[0];
+    if (!email || typeof email !== 'string' || !email.trim()) {
+      return res.status(400).json({ success: false, message: 'Email is required' });
     }
-
-    // Convert empty strings to undefined for optional ObjectId fields
-    if (userData.blockId === '' || userData.blockId === null) {
-      userData.blockId = undefined;
-    }
-    if (userData.roomId === '' || userData.roomId === null) {
-      userData.roomId = undefined;
-    }
-    if (userData.hostelId === '' || userData.hostelId === null) {
-      userData.hostelId = undefined;
-    }
-    if (userData.planId === '' || userData.planId === null) {
-      userData.planId = undefined;
-    }
-
-    // Convert empty strings to undefined for nested objects
-    if (userData.address && Object.values(userData.address).every(v => v === '' || v === null || v === undefined)) {
-      userData.address = undefined;
-    }
-    if (userData.parentContact && Object.values(userData.parentContact).every(v => v === '' || v === null || v === undefined)) {
-      userData.parentContact = undefined;
-    }
-    if (userData.emergencyContact && Object.values(userData.emergencyContact).every(v => v === '' || v === null || v === undefined)) {
-      userData.emergencyContact = undefined;
-    }
-    if (userData.dateOfBirth === '' || userData.dateOfBirth === null) {
-      userData.dateOfBirth = undefined;
+    const normalizedEmail = email.toLowerCase().trim();
+    const rfcEmailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+    if (!rfcEmailRegex.test(normalizedEmail)) {
+      return res.status(400).json({ success: false, message: 'Please provide a valid email address' });
     }
 
-    // Handle role - convert to array if single role provided
-    if (userData.role && !Array.isArray(userData.role)) {
-      userData.role = [userData.role];
+    // Role escalation protection: non-superadmins CANNOT create 'owner' or 'superadmin' accounts
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    const rawRoles = Array.isArray(roles) && roles.length > 0
+      ? roles
+      : (Array.isArray(role) ? role : [role || 'student']);
+
+    const forbiddenPrivilegedRoles = ['owner', 'superadmin'];
+    if (!isSuperAdmin && rawRoles.some((r) => forbiddenPrivilegedRoles.includes(String(r).toLowerCase()))) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: You are not authorized to create owner or superadmin accounts.',
+      });
     }
 
-    // Set currentRole to first role if multiple roles
-    if (userData.role && userData.role.length > 0) {
-      userData.currentRole = userData.role[0];
+    const allowedStaffRoles = ['warden', 'cleaner', 'supervisor', 'security', 'student'];
+    const sanitizedRoles = isSuperAdmin
+      ? rawRoles.map(String)
+      : rawRoles.filter((r) => allowedStaffRoles.includes(String(r).toLowerCase()));
+
+    if (sanitizedRoles.length === 0) {
+      sanitizedRoles.push('student');
     }
 
+    const finalRole = sanitizedRoles;
+    const finalCurrentRole = (currentRole && sanitizedRoles.includes(currentRole)) ? currentRole : sanitizedRoles[0];
+
+    // Check duplicate email
+    const existing = await User.findOne({ email: normalizedEmail });
+    if (existing) {
+      return res.status(400).json({ success: false, message: 'User already exists with this email' });
+    }
+
+    let resolvedHostelId = hostelId || undefined;
     // Security: Validate hostelId for owner
     if (req.user?.role === 'owner') {
-      if (!userData.hostelId) {
+      if (!resolvedHostelId) {
         const ownerHostelIds = await getOwnerHostelIds(req);
         if (ownerHostelIds.length === 1) {
-          userData.hostelId = ownerHostelIds[0];
+          resolvedHostelId = ownerHostelIds[0];
         } else if (ownerHostelIds.length === 0) {
           return res.status(400).json({ success: false, message: 'You do not own any hostels yet. Please create a hostel first.' });
         } else {
           return res.status(400).json({ success: false, message: 'hostelId is required' });
         }
       }
-      await assertOwnsHostel(req, userData.hostelId);
+      await assertOwnsHostel(req, resolvedHostelId);
     }
 
-    // Save original password before it gets hashed (for email)
-    const originalPassword = userData.password;
-
-    // Generate temporary password if not provided
+    // Password handling
+    const originalPassword = password;
     let tempPassword = null;
-    if (!userData.password) {
+    let finalPassword = password;
+    if (!finalPassword) {
       tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8).toUpperCase() + '123';
-      userData.password = tempPassword;
+      finalPassword = tempPassword;
     }
+
+    const userData = {
+      name: name.trim().slice(0, 100),
+      email: normalizedEmail,
+      password: finalPassword,
+      role: finalRole,
+      roles: finalRole,
+      currentRole: finalCurrentRole,
+      phone: phone ? String(phone).trim() : '0000000000',
+      hostelId: resolvedHostelId,
+      blockId: blockId || undefined,
+      roomId: roomId || undefined,
+      planId: planId || undefined,
+      studentId: studentId ? String(studentId).trim() : undefined,
+      status: 'active',
+      dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
+      gender: gender || undefined,
+      course: course ? String(course).trim() : undefined,
+      year: year ? String(year).trim() : undefined,
+      address: address && typeof address === 'object' && Object.values(address).some(Boolean) ? address : undefined,
+      parentContact: parentContact && typeof parentContact === 'object' && Object.values(parentContact).some(Boolean) ? parentContact : undefined,
+      emergencyContact: emergencyContact && typeof emergencyContact === 'object' && Object.values(emergencyContact).some(Boolean) ? emergencyContact : undefined,
+    };
 
     const user = await User.create(userData);
 
@@ -1181,11 +1288,7 @@ exports.createUser = async (req, res) => {
     if (user.email) {
       const hostel = await Hostel.findById(user.hostelId);
       const hostelName = hostel?.name || 'Hostel';
-
-      // Use the original password (before hashing) or tempPassword for email
       const passwordForEmail = tempPassword || originalPassword || 'Please contact admin for password';
-
-      // Check if user is a student
       const isStudent = Array.isArray(user.role) ? user.role.includes('student') : user.role === 'student';
 
       if (isStudent) {
@@ -1197,7 +1300,7 @@ exports.createUser = async (req, res) => {
             email: user.email,
             password: passwordForEmail,
           }
-        );
+        ).catch(err => console.error(`Welcome email failed for ${user.email}:`, err.message));
       } else {
         // Send staff welcome email for non-student staff
         await sendStaffWelcomeEmail(
@@ -1298,6 +1401,13 @@ exports.updateUser = async (req, res) => {
       await assertOwnsHostel(req, updateData.hostelId);
     }
 
+    // Check if modifying an owner or superadmin by non-superadmin
+    const isSuperAdmin = req.user?.role === 'superadmin';
+    const targetRoles = Array.isArray(existingUser.role) ? existingUser.role : [existingUser.role];
+    if (!isSuperAdmin && targetRoles.some(r => ['owner', 'superadmin'].includes(String(r).toLowerCase()))) {
+      return res.status(403).json({ success: false, message: 'Not authorized to modify owner or superadmin accounts' });
+    }
+
     if (updateData.password !== undefined && (updateData.password === '' || updateData.password == null)) {
       delete updateData.password;
     }
@@ -1310,24 +1420,56 @@ exports.updateUser = async (req, res) => {
       }
     });
 
-    const allowedFields = ['name', 'email', 'phone', 'role', 'roles', 'currentRole', 'hostelId', 'blockId', 'roomId', 'planId', 'status', 'parentContact', 'emergencyContact', 'address', 'dateOfBirth'];
     const set = {};
 
-    allowedFields.forEach((field) => {
+    // Validate email if changing
+    if (updateData.email !== undefined) {
+      if (typeof updateData.email !== 'string' || !updateData.email.trim()) {
+        return res.status(400).json({ success: false, message: 'Email cannot be empty' });
+      }
+      const normalizedEmail = updateData.email.toLowerCase().trim();
+      const rfcEmailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+      if (!rfcEmailRegex.test(normalizedEmail)) {
+        return res.status(400).json({ success: false, message: 'Please provide a valid email address' });
+      }
+      const duplicate = await User.findOne({ email: normalizedEmail, _id: { $ne: userId } });
+      if (duplicate) {
+        return res.status(400).json({ success: false, message: 'Email is already in use by another account' });
+      }
+      set.email = normalizedEmail;
+    }
+
+    // Role escalation check
+    const requestedRoles = updateData.roles || (updateData.role !== undefined ? (Array.isArray(updateData.role) ? updateData.role : [updateData.role]) : null);
+    if (requestedRoles) {
+      const forbiddenPrivilegedRoles = ['owner', 'superadmin'];
+      if (!isSuperAdmin && requestedRoles.some(r => forbiddenPrivilegedRoles.includes(String(r).toLowerCase()))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: You are not authorized to assign owner or superadmin roles.',
+        });
+      }
+      const allowedStaffRoles = ['warden', 'cleaner', 'supervisor', 'security', 'student'];
+      const sanitizedRoles = isSuperAdmin
+        ? requestedRoles.map(String)
+        : requestedRoles.filter(r => allowedStaffRoles.includes(String(r).toLowerCase()));
+      if (sanitizedRoles.length === 0) sanitizedRoles.push('student');
+      set.role = sanitizedRoles;
+      set.roles = sanitizedRoles;
+      set.currentRole = (updateData.currentRole && sanitizedRoles.includes(updateData.currentRole)) ? updateData.currentRole : sanitizedRoles[0];
+    }
+
+    const safeScalarFields = ['name', 'phone', 'hostelId', 'blockId', 'roomId', 'planId', 'status', 'parentContact', 'emergencyContact', 'address', 'dateOfBirth'];
+    safeScalarFields.forEach((field) => {
       if (updateData[field] !== undefined) {
         set[field] = updateData[field];
       }
     });
 
-    if (updateData.role !== undefined) {
-      const rolesArray = Array.isArray(updateData.role) ? updateData.role : [updateData.role];
-      set.role = rolesArray;
-      if (!set.currentRole || !rolesArray.includes(set.currentRole)) {
-        set.currentRole = rolesArray[0];
-      }
-    }
-
     if (updateData.password && typeof updateData.password === 'string' && updateData.password.length > 0) {
+      if (updateData.password.length < 8) {
+        return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
+      }
       const salt = await bcrypt.genSalt(10);
       set.password = await bcrypt.hash(updateData.password, salt);
     }
@@ -2255,8 +2397,32 @@ exports.updateGeoFence = async (req, res) => {
 
 exports.createFeeStructure = async (req, res) => {
   try {
-    await assertOwnsHostel(req, req.body.hostelId);
-    const feeStructure = await FeeStructure.create(req.body);
+    const { hostelId, name, type, amount, frequency, applicableTo, roomCategories, roomIds, isActive } = req.body;
+    if (!hostelId || !name || !type || amount === undefined) {
+      return res.status(400).json({ success: false, message: 'hostelId, name, type, and amount are required' });
+    }
+    await assertOwnsHostel(req, hostelId);
+    const parsedAmount = Number(amount);
+    if (isNaN(parsedAmount) || parsedAmount < 0) {
+      return res.status(400).json({ success: false, message: 'Amount must be a non-negative number' });
+    }
+    const validTypes = ['hostel_rent', 'fine', 'mess', 'maintenance', 'other'];
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ success: false, message: `Invalid type. Allowed: ${validTypes.join(', ')}` });
+    }
+
+    const feeStructureData = {
+      hostelId,
+      name: String(name).trim().slice(0, 100),
+      type,
+      amount: parsedAmount,
+      frequency: ['one-time', 'monthly', 'yearly'].includes(frequency) ? frequency : 'monthly',
+      applicableTo: ['all', 'room_category', 'specific_rooms'].includes(applicableTo) ? applicableTo : 'all',
+      roomCategories: Array.isArray(roomCategories) ? roomCategories.map(String) : [],
+      roomIds: Array.isArray(roomIds) ? roomIds : [],
+      isActive: isActive !== undefined ? Boolean(isActive) : true,
+    };
+    const feeStructure = await FeeStructure.create(feeStructureData);
     res.status(201).json({ success: true, data: feeStructure });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message });
@@ -2374,16 +2540,82 @@ exports.getApplicableFeeForStudent = async (req, res) => {
 
 exports.createPayment = async (req, res) => {
   try {
-    const body = { ...req.body };
-    await assertOwnsHostel(req, body.hostelId);
-    if (body.planId) {
-      const plan = await Plan.findById(body.planId).select('durationMonths').lean();
+    const {
+      studentId,
+      hostelId,
+      type,
+      amount,
+      status,
+      paymentMethod,
+      transactionId,
+      dueDate,
+      paidDate,
+      periodStart,
+      periodEnd,
+      planId,
+      metadata,
+    } = req.body;
+
+    if (!studentId || !hostelId || !type || amount === undefined || amount === null) {
+      return res.status(400).json({ success: false, message: 'studentId, hostelId, type, and amount are required' });
+    }
+
+    await assertOwnsHostel(req, hostelId);
+
+    // Verify student belongs to hostel
+    const student = await User.findById(studentId).select('hostelId');
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    if (String(student.hostelId) !== String(hostelId)) {
+      return res.status(400).json({ success: false, message: 'Student does not belong to the specified hostel' });
+    }
+
+    const parsedAmount = Number(amount);
+    if (isNaN(parsedAmount) || parsedAmount < 0) {
+      return res.status(400).json({ success: false, message: 'Amount must be a non-negative number' });
+    }
+
+    const validTypes = ['hostel_rent', 'fine', 'mess', 'maintenance', 'other'];
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ success: false, message: `Invalid payment type. Allowed: ${validTypes.join(', ')}` });
+    }
+
+    const validStatuses = ['pending', 'paid', 'failed', 'refunded'];
+    const finalStatus = status && validStatuses.includes(status) ? status : 'pending';
+
+    let normalizedMethod = paymentMethod;
+    if (normalizedMethod === 'offline_cash') normalizedMethod = 'cash';
+    const validMethods = ['upi', 'card', 'netbanking', 'cash', 'other'];
+    if (normalizedMethod && !validMethods.includes(normalizedMethod)) {
+      return res.status(400).json({ success: false, message: `Invalid payment method. Allowed: ${validMethods.join(', ')}` });
+    }
+
+    const paymentData = {
+      studentId,
+      hostelId,
+      type,
+      amount: parsedAmount,
+      status: finalStatus,
+      paymentMethod: normalizedMethod,
+      transactionId: typeof transactionId === 'string' ? transactionId.slice(0, 100) : undefined,
+      dueDate: dueDate ? new Date(dueDate) : undefined,
+      paidDate: paidDate ? new Date(paidDate) : (finalStatus === 'paid' ? new Date() : undefined),
+      periodStart: periodStart ? new Date(periodStart) : undefined,
+      periodEnd: periodEnd ? new Date(periodEnd) : undefined,
+      planId: planId || undefined,
+      metadata: typeof metadata === 'object' ? metadata : undefined,
+    };
+
+    if (planId) {
+      const plan = await Plan.findById(planId).select('durationMonths').lean();
       if (plan && plan.durationMonths) {
-        const startDate = body.dueDate ? new Date(body.dueDate) : new Date();
-        setPeriodFromPlan(body, startDate, plan.durationMonths);
+        const startDate = dueDate ? new Date(dueDate) : new Date();
+        setPeriodFromPlan(paymentData, startDate, plan.durationMonths);
       }
     }
-    const payment = await Payment.create(body);
+
+    const payment = await Payment.create(paymentData);
     res.status(201).json({ success: true, data: payment });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message });
@@ -2771,8 +3003,24 @@ exports.updateStudentStatus = async (req, res) => {
 
 exports.createTemplate = async (req, res) => {
   try {
-    await assertOwnsHostel(req, req.body.hostelId);
-    const template = await Template.create(req.body);
+    const { name, type, category, subject, content, variables, hostelId, isActive } = req.body;
+    if (!name || !type || !content) {
+      return res.status(400).json({ success: false, message: 'name, type, and content are required' });
+    }
+    if (hostelId) {
+      await assertOwnsHostel(req, hostelId);
+    }
+    const templateData = {
+      name: String(name).trim().slice(0, 100),
+      type: ['sms', 'email', 'push'].includes(type) ? type : 'push',
+      category: ['notice', 'holiday', 'emergency', 'payment', 'violation', 'other'].includes(category) ? category : 'notice',
+      subject: subject ? String(subject).trim().slice(0, 200) : undefined,
+      content: String(content).trim().slice(0, 4000),
+      variables: Array.isArray(variables) ? variables.map(String).slice(0, 20) : [],
+      hostelId: hostelId || undefined,
+      isActive: isActive !== undefined ? Boolean(isActive) : true,
+    };
+    const template = await Template.create(templateData);
     res.status(201).json({ success: true, data: template });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message });
@@ -3324,15 +3572,39 @@ function convertToCSV(data) {
 
 exports.createSupportTicket = async (req, res) => {
   try {
+    const { category, priority, subject, description, hostelId, attachments } = req.body;
+
+    if (!category || !subject || !description) {
+      return res.status(400).json({ success: false, message: 'category, subject, and description are required' });
+    }
+
+    const validCategories = ['technical', 'billing', 'feature_request', 'bug', 'other'];
+    if (!validCategories.includes(category)) {
+      return res.status(400).json({ success: false, message: `Invalid category. Allowed: ${validCategories.join(', ')}` });
+    }
+
+    const validPriorities = ['low', 'medium', 'high', 'urgent'];
+    const finalPriority = priority && validPriorities.includes(priority) ? priority : 'medium';
+
+    if (hostelId) {
+      await assertOwnsHostel(req, hostelId);
+    }
+
     const ticketNumber = `TKT-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
     const ticket = await SupportTicket.create({
-      ...req.body,
       ticketNumber,
-      raisedBy: req.user.id,
+      raisedBy: req.user.id || req.user._id,
+      hostelId: hostelId || undefined,
+      category,
+      priority: finalPriority,
+      subject: String(subject).trim().slice(0, 200),
+      description: String(description).trim().slice(0, 2000),
+      status: 'open',
+      attachments: Array.isArray(attachments) ? attachments.map(String).slice(0, 5) : [],
     });
     res.status(201).json({ success: true, data: ticket });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 

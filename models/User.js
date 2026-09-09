@@ -48,6 +48,7 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Room',
   },
+  room: String, // String snapshot of roomNumber (e.g. 204 or B-102)
   planId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Plan',
@@ -59,8 +60,26 @@ const userSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'on-leave', 'exited', 'suspended'],
+    enum: ['active', 'on-leave', 'exited', 'suspended', 'pending_onboarding'],
     default: 'active',
+  },
+  onboardingStatus: {
+    type: String,
+    enum: ['not_started', 'in_progress', 'completed'],
+    default: 'not_started',
+    index: true,
+  },
+  onboardingId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'StudentOnboarding',
+  },
+  academicInfo: {
+    college: String,
+    department: String,
+    semester: String,
+    admissionNumber: String,
+    studentIdNumber: String,
+    course: String,
   },
   gender: {
     type: String,

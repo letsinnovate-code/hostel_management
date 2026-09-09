@@ -11,8 +11,11 @@ import {
   AlertTriangle,
   Users,
   BedDouble,
+  UserCheck,
+  LifeBuoy,
   LogOut,
   X,
+  UserPlus,
 } from 'lucide-react';
 
 interface WardenSidebarProps {
@@ -37,6 +40,11 @@ export default function WardenSidebar({ isOpen, onClose }: WardenSidebarProps) {
       icon: LayoutDashboard,
     },
     {
+      label: 'Onboarding Applications',
+      href: '/warden/onboarding',
+      icon: UserPlus,
+    },
+    {
       label: 'Students',
       href: '/warden/students',
       icon: Users,
@@ -45,6 +53,11 @@ export default function WardenSidebar({ isOpen, onClose }: WardenSidebarProps) {
       label: 'Rooms & Beds',
       href: '/warden/rooms',
       icon: BedDouble,
+    },
+    {
+      label: 'Attendance',
+      href: '/warden/attendance',
+      icon: UserCheck,
     },
     {
       label: 'Curfew & Alerts',
@@ -60,6 +73,11 @@ export default function WardenSidebar({ isOpen, onClose }: WardenSidebarProps) {
       label: 'Disciplinary Records',
       href: '/warden/violations',
       icon: AlertTriangle,
+    },
+    {
+      label: 'Complaints',
+      href: '/warden/complaints',
+      icon: LifeBuoy,
     },
   ];
 

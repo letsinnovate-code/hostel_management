@@ -26,6 +26,8 @@ import {
   BarChart3,
   Activity,
   Timer,
+  Sparkles,
+  ChevronRight,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -33,6 +35,7 @@ export default function StudentDashboard() {
   const { user } = useAuth();
   const router = useRouter();
   const [status, setStatus] = useState<any>(null);
+  const [onboardingSummary, setOnboardingSummary] = useState<any>(null);
   const [boundary, setBoundary] = useState<any>(null);
   const [currentLocationForMap, setCurrentLocationForMap] = useState<{ latitude: number; longitude: number } | null>(null);
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -74,13 +77,14 @@ export default function StudentDashboard() {
           { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
         );
       }
-      const [statusRes, notificationsRes, permissionsRes, violationsRes, analyticsRes, boundaryRes] = await Promise.all([
+      const [statusRes, notificationsRes, permissionsRes, violationsRes, analyticsRes, boundaryRes, onboardingRes] = await Promise.all([
         api.getStatus().catch(() => ({ data: null })),
         api.getNotifications().catch(() => ({ data: [] })),
         api.getPermissionRequests().catch(() => ({ data: [] })),
         api.getViolationHistory().catch(() => ({ data: [] })),
         api.getAttendanceAnalytics(analyticsPeriod).catch(() => ({ data: null })),
         api.getHostelBoundary().catch(() => null),
+        api.getStudentOnboardingState().catch(() => ({ data: null })),
       ]);
 
       let statusData = statusRes?.data ? {
@@ -96,6 +100,9 @@ export default function StudentDashboard() {
       setPermissions(permissionsRes?.data?.slice(0, 3) || []);
       setViolations(violationsRes?.data?.slice(0, 3) || []);
       setAnalytics(analyticsRes?.data || null);
+      if (onboardingRes?.data) {
+        setOnboardingSummary(onboardingRes.data);
+      }
     } catch (error: any) {
       console.error('Failed to load data:', error);
     } finally {
@@ -268,12 +275,40 @@ export default function StudentDashboard() {
       <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50">
         <div className="p-6 w-full">
           {/* Header */}
-          <div className="mb-8">
+          <div className="mb-6">
             <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
               Dashboard
             </h1>
             <p className="text-gray-600 mt-2">Welcome back, {user?.name || 'Student'}</p>
           </div>
+
+          {/* Onboarding Incomplete Banner */}
+          {onboardingSummary && onboardingSummary.status !== 'ONBOARDING_COMPLETED' && (
+            <div className="mb-6 p-5 rounded-2xl bg-gradient-to-r from-indigo-900 via-blue-900 to-slate-900 text-white shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
+                  <Sparkles className="w-4 h-4" />
+                  Hostel Onboarding In Progress ({onboardingSummary.progressPercentage || 0}%)
+                </div>
+                <h3 className="text-base font-bold text-white">Complete Your Resident Onboarding</h3>
+                <p className="text-xs text-blue-200">
+                  Status:{' '}
+                  <span className="font-semibold text-white">
+                    {onboardingSummary.status?.replace(/_/g, ' ')}
+                  </span>
+                  . Complete profile, upload documents, and accept hostel agreement.
+                </p>
+              </div>
+
+              <Link
+                href="/student/onboarding"
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-500 hover:bg-indigo-600 text-white font-semibold text-xs rounded-xl shadow-md transition-all whitespace-nowrap"
+              >
+                Continue Onboarding
+                <ChevronRight className="w-4 h-4" />
+              </Link>
+            </div>
+          )}
 
           {loading && !status ? (
             <div className="bg-white rounded-2xl shadow-lg p-12 text-center mb-6">

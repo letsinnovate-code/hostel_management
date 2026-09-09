@@ -82,12 +82,14 @@ router.put('/location/permission', updateLocationPermission);
 router.post('/push-token', registerPushToken);
 router.delete('/push-token', clearPushToken);
 router.post('/expo-push-token', registerExpoPushToken);
+const { validateObjectId } = require('../middleware/validator');
+
 router.get('/attendance/analytics', getAttendanceAnalytics);
 
 // Permission Requests
 router.post('/permissions', createPermissionRequest);
 router.get('/permissions', getPermissionRequests);
-router.post('/permissions/:id/cancel', cancelPermissionRequest);
+router.post('/permissions/:id/cancel', validateObjectId('id'), cancelPermissionRequest);
 
 // Violation History
 router.get('/violations', getViolationHistory);
@@ -106,8 +108,8 @@ router.get('/emergency', getEmergencyHistory);
 
 // Notice Board
 router.get('/notifications', getNotifications);
-router.post('/notifications/:id/read', markNotificationRead);
-router.post('/notifications/:id/dismiss', dismissNotification);
+router.post('/notifications/:id/read', validateObjectId('id'), markNotificationRead);
+router.post('/notifications/:id/dismiss', validateObjectId('id'), dismissNotification);
 
 // Visitors
 router.post('/visitors', createVisitorRequest);
@@ -121,7 +123,7 @@ router.post('/mess/feedback', submitMessFeedback);
 router.get('/fee-structure', getMyFeeStructure);
 router.get('/payments', getMyPayments);
 router.post('/payments/create-order', createRazorpayOrder);
-router.post('/payments/:paymentId/create-order', createOrderForExistingPayment);
+router.post('/payments/:paymentId/create-order', validateObjectId('paymentId'), createOrderForExistingPayment);
 router.post('/payments/verify', verifyRazorpayPayment);
 
 // Support tickets
