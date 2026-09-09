@@ -9,8 +9,8 @@ const {
   createCallbackRequest,
   uploadSelfDocuments,
 } = require('../controllers/publicController');
-const { createUploadMiddleware } = require('../middleware/uploadValidation');
-const { validateObjectId, validateBoundedString, handleValidationErrors } = require('../middleware/validator');
+const { createUploadMiddleware } = require('../middleware/uploadValidation.js');
+const { validateObjectId, validateBoundedString, handleValidationErrors } = require('../middleware/validator.js');
 const { body } = require('express-validator');
 
 // Rate limiting for public form submissions (anti-spam / anti-DoS)
