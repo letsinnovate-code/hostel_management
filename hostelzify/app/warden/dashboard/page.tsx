@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useAuth } from '../../../contexts/AuthContext';
 import api from '../../../services/api';
-import { alertApi } from '../../../services/alertApi';
+import { alertApi, CurfewConfigurationData } from '../../../services/alertApi';
 import { useAlertSocket } from '../../../contexts/AlertSocketContext';
 import toast from 'react-hot-toast';
 import {
@@ -37,13 +38,13 @@ import {
 export default function WardenDashboard() {
   const { user } = useAuth();
   const router = useRouter();
-  const { connected, lastCurfewEvent } = useAlertSocket();
+  const { connected, lastCurfewEvent, lastOperationalEvent, refreshKey } = useAlertSocket();
 
   // ── Live Clock State ──────────────────────────────────────────────────────────
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
 
   // ── Active Navigation Tab ───────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState<'overview' | 'permissions' | 'violations' | 'visitors' | 'curfew' | 'complaints'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'permissions' | 'violations' | 'visitors' | 'complaints'>('overview');
 
   // ── Dashboard & Auxiliary Data State ────────────────────────────────────────
   const [dashboard, setDashboard] = useState<any>(null);
@@ -67,41 +68,16 @@ export default function WardenDashboard() {
   const [complaintTypeFilter, setComplaintTypeFilter] = useState('all');
   const [complaintStatusFilter, setComplaintStatusFilter] = useState('all');
 
-  // ── Curfew Hub & Customization State ────────────────────────────────────────
-  const [curfewHubTab, setCurfewHubTab] = useState<'control' | 'history'>('control');
+  // ── Scheduled Curfew State ──────────────────────────────────────────────────
+  const [curfewConfigData, setCurfewConfigData] = useState<CurfewConfigurationData | null>(null);
+  const [activeCurfewSession, setActiveCurfewSession] = useState<any>(null);
+  const [loadingCurfewSchedule, setLoadingCurfewSchedule] = useState(false);
   const [curfewConfig, setCurfewConfig] = useState({
     curfewTime: '21:00',
     curfewEndTime: '06:00',
     weekendCurfewTime: '22:00',
     gracePeriodMinutes: 15,
-    recipients: {
-      students: true,
-      warden: true,
-      owner: true,
-      parents: true,
-      guards: false,
-    },
-    timing: {
-      preCurfewReminder: true,
-      preCurfewReminderMinutes: 15,
-      onCurfewStart: true,
-      onTenMinuteWarning: true,
-      onGraceExpiry: true,
-      onParentEscalation: true,
-      parentEscalationMinutes: 30,
-    },
   });
-  const [savingConfig, setSavingConfig] = useState(false);
-  const [startingCurfew, setStartingCurfew] = useState(false);
-  const [endingCurfew, setEndingCurfew] = useState(false);
-
-  // ── Curfew History ──────────────────────────────────────────────────────────
-  const [historySubTab, setHistorySubTab] = useState<'sessions' | 'violations'>('sessions');
-  const [curfewSessions, setCurfewSessions] = useState<any[]>([]);
-  const [curfewViolationHistory, setCurfewViolationHistory] = useState<any[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  const [historySearch, setHistorySearch] = useState('');
-  const [historyDateFilter, setHistoryDateFilter] = useState('');
 
   // ── Quick Action Modals State ────────────────────────────────────────────────
   const [markAttendanceModal, setMarkAttendanceModal] = useState({
@@ -187,8 +163,8 @@ export default function WardenDashboard() {
   }, []);
 
   // ── Load Dashboard Data ─────────────────────────────────────────────────────
-  const loadDashboard = useCallback(async () => {
-    setLoading(true);
+  const loadDashboard = useCallback(async (isSilent = false) => {
+    if (!isSilent) setLoading(true);
     try {
       const response = await api.getDashboard();
       const d = response.data || {};
@@ -204,15 +180,13 @@ export default function WardenDashboard() {
           curfewEndTime: d.curfewStatus.curfewEndTime || prev.curfewEndTime,
           weekendCurfewTime: d.curfewStatus.weekendCurfewTime || prev.weekendCurfewTime,
           gracePeriodMinutes: d.curfewStatus.gracePeriodMinutes || prev.gracePeriodMinutes,
-          recipients: d.curfewStatus.curfewAlertConfig?.recipients || prev.recipients,
-          timing: d.curfewStatus.curfewAlertConfig?.timing || prev.timing,
         }));
       }
     } catch (error: any) {
       console.error('Failed to load dashboard:', error);
-      toast.error(error.message || 'Failed to refresh dashboard');
+      if (!isSilent) toast.error(error.message || 'Failed to refresh dashboard');
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
     }
   }, []);
 
@@ -243,25 +217,31 @@ export default function WardenDashboard() {
     }
   }, [complaintTypeFilter, complaintStatusFilter]);
 
-  // ── Load Curfew History ─────────────────────────────────────────────────────
-  const loadCurfewHistory = useCallback(async () => {
+  // ── Load Scheduled Curfew ───────────────────────────────────────────────────
+  const loadCurfewSchedule = useCallback(async (isSilent = false) => {
     const effectiveHostelId = dashboard?.hostel?.id || user?.hostelId;
     if (!effectiveHostelId) return;
-    setLoadingHistory(true);
+    if (!isSilent) setLoadingCurfewSchedule(true);
     try {
-      const res = await alertApi.getCurfewHistory(effectiveHostelId, {
-        date: historyDateFilter || undefined,
-        search: historySearch || undefined,
-      });
-      const data = res.data || {};
-      setCurfewSessions(data.sessions || []);
-      setCurfewViolationHistory(data.violations || []);
-    } catch (error: any) {
-      console.error('Failed to load curfew history:', error);
+      const res = await alertApi.getActiveCurfewSession(effectiveHostelId);
+      if (res?.success && res?.data) {
+        setCurfewConfigData(res.data.configuration || null);
+        setActiveCurfewSession(res.data.session || null);
+        if (res.data.configuration) {
+          setCurfewConfig((prev) => ({
+            ...prev,
+            curfewTime: res.data.configuration?.startTime || prev.curfewTime,
+            curfewEndTime: res.data.configuration?.endTime || prev.curfewEndTime,
+            gracePeriodMinutes: res.data.configuration?.gracePeriodMinutes || prev.gracePeriodMinutes,
+          }));
+        }
+      }
+    } catch (err) {
+      console.warn('Could not load active curfew session:', err);
     } finally {
-      setLoadingHistory(false);
+      if (!isSilent) setLoadingCurfewSchedule(false);
     }
-  }, [dashboard?.hostel?.id, user?.hostelId, historyDateFilter, historySearch]);
+  }, [dashboard?.hostel?.id, user?.hostelId]);
 
   useEffect(() => {
     if (!user || user.role !== 'warden') {
@@ -273,22 +253,64 @@ export default function WardenDashboard() {
   }, [user, router, loadDashboard, loadStudents]);
 
   useEffect(() => {
-    if (activeTab === 'curfew') {
-      loadCurfewHistory();
-    } else if (activeTab === 'complaints') {
+    if (user?.hostelId || dashboard?.hostel?.id) {
+      loadCurfewSchedule();
+    }
+  }, [user?.hostelId, dashboard?.hostel?.id, loadCurfewSchedule]);
+
+  useEffect(() => {
+    if (activeTab === 'complaints') {
       loadComplaints();
     }
-  }, [activeTab, loadCurfewHistory, loadComplaints]);
+  }, [activeTab, loadComplaints]);
+
+  // ── Real-Time Reactive Socket Event Updates ─────────────────────────────────
+  // Whenever any socket event arrives (curfew, gate, attendance, leave, violation, complaint):
+  useEffect(() => {
+    if (!user || user.role !== 'warden') return;
+    if (refreshKey > 0) {
+      loadDashboard(true);
+      loadCurfewSchedule(true);
+      if (activeTab === 'complaints') loadComplaints();
+    }
+  }, [refreshKey, lastCurfewEvent, lastOperationalEvent, user, activeTab, loadDashboard, loadCurfewSchedule, loadComplaints]);
+
+  // ── Real-Time Polling & Tab Visibility Synchronization ──────────────────────
+  // Guarantees all dashboard metrics update in real-time without manual page refresh
+  useEffect(() => {
+    if (!user || user.role !== 'warden') return;
+
+    const interval = setInterval(() => {
+      loadDashboard(true);
+      loadCurfewSchedule(true);
+      if (activeTab === 'complaints') loadComplaints();
+    }, 8000);
+
+    const onVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        loadDashboard(true);
+        loadCurfewSchedule(true);
+        if (activeTab === 'complaints') loadComplaints();
+      }
+    };
+
+    window.addEventListener('visibilitychange', onVisibilityOrFocus);
+    window.addEventListener('focus', onVisibilityOrFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('visibilitychange', onVisibilityOrFocus);
+      window.removeEventListener('focus', onVisibilityOrFocus);
+    };
+  }, [user, activeTab, loadDashboard, loadCurfewSchedule, loadComplaints]);
 
   // Refresh on socket curfew events
   useEffect(() => {
     if (lastCurfewEvent) {
       loadDashboard();
-      if (activeTab === 'curfew') {
-        loadCurfewHistory();
-      }
+      loadCurfewSchedule();
     }
-  }, [lastCurfewEvent, activeTab, loadDashboard, loadCurfewHistory]);
+  }, [lastCurfewEvent, loadDashboard, loadCurfewSchedule]);
 
   // ── Permission Actions ──────────────────────────────────────────────────────
   const handleApprovePermission = async (id: string) => {
@@ -353,7 +375,6 @@ export default function WardenDashboard() {
       } else if (type === 'curfew') {
         await alertApi.deleteCurfewViolation(id);
         toast.success('Curfew record deleted');
-        setCurfewViolationHistory((prev) => prev.filter((v) => v._id !== id));
       }
       setDeleteConfirmModal({ open: false, type: 'permission', id: '', description: '' });
       loadDashboard();
@@ -588,38 +609,10 @@ export default function WardenDashboard() {
     }
   };
 
-  // ── Curfew Actions ──────────────────────────────────────────────────────────
-  const isCurfewActive = Boolean(dashboard?.curfewStatus?.isCurfewActive);
-
-  const handleStartCurfewSweep = async () => {
-    const effectiveHostelId = dashboard?.hostel?.id || user?.hostelId;
-    if (!effectiveHostelId) return;
-    setStartingCurfew(true);
-    try {
-      await alertApi.startImmediateCurfew(effectiveHostelId);
-      toast.success('Curfew sweep initiated successfully');
-      loadDashboard();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to trigger sweep');
-    } finally {
-      setStartingCurfew(false);
-    }
-  };
-
-  const handleEndCurfew = async () => {
-    const effectiveHostelId = dashboard?.hostel?.id || user?.hostelId;
-    if (!effectiveHostelId) return;
-    setEndingCurfew(true);
-    try {
-      await alertApi.endCurfew(effectiveHostelId, 'Curfew terminated by Warden');
-      toast.success('Curfew ended successfully');
-      loadDashboard();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to end curfew');
-    } finally {
-      setEndingCurfew(false);
-    }
-  };
+  // ── Curfew Status ───────────────────────────────────────────────────────────
+  const isCurfewActive = Boolean(
+    activeCurfewSession?.status === 'ACTIVE' || dashboard?.curfewStatus?.isCurfewActive
+  );
 
   // ── Filters & Search ────────────────────────────────────────────────────────
   const filteredPermissions = permissions.filter((p) => {
@@ -925,18 +918,6 @@ export default function WardenDashboard() {
             </span>
           )}
         </button>
-
-        <button
-          onClick={() => setActiveTab('curfew')}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
-            activeTab === 'curfew'
-              ? 'bg-indigo-600 text-white shadow-xs'
-              : 'text-gray-600 hover:bg-gray-100'
-          }`}
-        >
-          Curfew Command Hub
-          <span className={`w-2 h-2 rounded-full ${isCurfewActive ? 'bg-rose-500 animate-ping' : 'bg-emerald-400'}`} />
-        </button>
       </div>
 
       {/* ── TAB 1: OPERATIONAL OVERVIEW (10 DOMAINS) ────────────────────────── */}
@@ -1206,12 +1187,12 @@ export default function WardenDashboard() {
               <div>
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold uppercase tracking-wider text-rose-700">8. Discipline & Curfew</span>
-                  <button
-                    onClick={() => setActiveTab('curfew')}
+                  <Link
+                    href="/warden/curfew"
                     className="text-xs text-rose-600 font-semibold hover:underline flex items-center gap-0.5"
                   >
-                    Hub <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
+                    Curfew Center <ChevronRight className="w-3.5 h-3.5" />
+                  </Link>
                 </div>
                 <div className="flex items-baseline gap-2 mt-2">
                   <p className="text-3xl font-black text-gray-900">{disciplineOverview.studentsWithIssues}</p>
@@ -1230,8 +1211,10 @@ export default function WardenDashboard() {
                   <span className="font-bold text-rose-600">{disciplineOverview.curfewViolationsCount}</span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-gray-500">Curfew Timing:</span>
-                  <span className="font-semibold text-gray-800 text-[11px]">{curfewConfig.curfewTime} - {curfewConfig.curfewEndTime}</span>
+                  <span className="text-gray-500">Scheduled Curfew:</span>
+                  <span className="font-semibold text-gray-800 text-[11px]">
+                    {curfewConfigData?.startTime ? `${curfewConfigData.startTime} - ${curfewConfigData.endTime}` : `${curfewConfig.curfewTime} - ${curfewConfig.curfewEndTime}`}
+                  </span>
                 </div>
               </div>
             </div>
@@ -1306,65 +1289,94 @@ export default function WardenDashboard() {
               )}
             </div>
 
-            {/* Curfew Quick Control Widget */}
-            <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-5 shadow-xs flex flex-col justify-between space-y-4">
+            {/* ── DOMAIN 10: SCHEDULED CURFEW & AUTOMATED MONITORING ── */}
+            <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-5 shadow-xs flex flex-col justify-between space-y-4 border border-indigo-900/40">
               <div>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Radio className="w-5 h-5 text-indigo-400" />
-                    <h2 className="text-sm font-bold text-white tracking-wide">Curfew Automation Hub</h2>
+                    <div className="w-8 h-8 rounded-xl bg-indigo-500/20 text-indigo-300 flex items-center justify-center border border-indigo-500/30">
+                      <Clock className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h2 className="text-sm font-bold text-white tracking-wide">Scheduled Curfew</h2>
+                      <p className="text-[11px] text-indigo-300">Automated student presence & location monitoring</p>
+                    </div>
                   </div>
                   <span
-                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                      isCurfewActive ? 'bg-rose-500 text-white animate-pulse' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 ${
+                      activeCurfewSession?.status === 'ACTIVE' || isCurfewActive
+                        ? 'bg-rose-500 text-white animate-pulse'
+                        : curfewConfigData?.isActive || activeCurfewSession?.status === 'SCHEDULED'
+                        ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                        : 'bg-slate-800 text-slate-400 border border-slate-700'
                     }`}
                   >
-                    {isCurfewActive ? 'Curfew In Progress' : 'Curfew Standby'}
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        activeCurfewSession?.status === 'ACTIVE' || isCurfewActive
+                          ? 'bg-white animate-ping'
+                          : curfewConfigData?.isActive || activeCurfewSession?.status === 'SCHEDULED'
+                          ? 'bg-indigo-400'
+                          : 'bg-slate-500'
+                      }`}
+                    />
+                    {activeCurfewSession?.status === 'ACTIVE' || isCurfewActive
+                      ? 'Curfew In Progress'
+                      : curfewConfigData?.isActive || activeCurfewSession?.status === 'SCHEDULED'
+                      ? 'Scheduled'
+                      : 'Inactive / Standby'}
                   </span>
                 </div>
-                <p className="text-xs text-slate-300 mt-1">
-                  Automated checks run daily at {curfewConfig.curfewTime} with a {curfewConfig.gracePeriodMinutes}-minute grace period.
-                </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 bg-white/5 p-3 rounded-xl border border-white/10 text-xs">
+              {/* Curfew Details Matrix */}
+              <div className="grid grid-cols-2 gap-3 bg-white/5 p-3.5 rounded-xl border border-white/10 text-xs">
                 <div>
-                  <p className="text-[10px] uppercase text-indigo-300">Scheduled Hours</p>
-                  <p className="font-bold text-white mt-0.5">{curfewConfig.curfewTime} - {curfewConfig.curfewEndTime}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-indigo-300 font-semibold">Curfew Window</p>
+                  <p className="font-bold text-white mt-0.5 text-sm font-mono">
+                    {curfewConfigData?.startTime || curfewConfig.curfewTime} — {curfewConfigData?.endTime || curfewConfig.curfewEndTime}
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    {curfewConfigData?.startDate ? `${curfewConfigData.startDate} → ${curfewConfigData.endDate || curfewConfigData.startDate}` : 'Daily Schedule'}
+                  </p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase text-indigo-300">Grace Buffer</p>
-                  <p className="font-bold text-white mt-0.5">{curfewConfig.gracePeriodMinutes} minutes</p>
+                  <p className="text-[10px] uppercase tracking-wider text-indigo-300 font-semibold">Duration & Cycle</p>
+                  <p className="font-bold text-white mt-0.5 text-sm">
+                    {curfewConfigData?.durationDisplay || '9 hours'}
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-0.5 capitalize">
+                    {curfewConfigData?.recurrence?.type === 'daily'
+                      ? 'Every Day'
+                      : curfewConfigData?.recurrence?.type === 'selected_days'
+                      ? `Days: ${curfewConfigData.recurrence.selectedDays?.join(', ') || 'Selected'}`
+                      : curfewConfigData?.recurrence?.type === 'one_time'
+                      ? 'One-Time Curfew'
+                      : 'Recurring Schedule'}
+                  </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
-                {isCurfewActive ? (
-                  <button
-                    onClick={handleEndCurfew}
-                    disabled={endingCurfew}
-                    className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-                  >
-                    <StopCircle className="w-4 h-4" />
-                    {endingCurfew ? 'Terminating...' : 'End Curfew Now'}
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleStartCurfewSweep}
-                    disabled={startingCurfew}
-                    className="flex-1 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-                  >
-                    <Play className="w-4 h-4" />
-                    {startingCurfew ? 'Initiating Sweep...' : 'Trigger Curfew Sweep'}
-                  </button>
-                )}
-                <button
-                  onClick={() => setActiveTab('curfew')}
-                  className="py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-colors"
-                >
-                  Configure
-                </button>
+              {/* Protocol Parameters */}
+              <div className="grid grid-cols-2 gap-2 text-[11px] bg-slate-950/40 p-2.5 rounded-xl border border-white/5">
+                <div className="flex items-center gap-1.5 text-slate-300">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  <span>Grace Period: <strong className="text-white">{curfewConfigData?.gracePeriodMinutes || 15}m</strong></span>
+                </div>
+                <div className="flex items-center gap-1.5 text-slate-300">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                  <span>Escalation: <strong className="text-white">{curfewConfigData?.escalationPeriodMinutes || 15}m</strong></span>
+                </div>
               </div>
+
+              {/* Action Button: Navigate to Dedicated Control Center */}
+              <Link
+                href="/warden/curfew"
+                className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-all shadow-xs flex items-center justify-center gap-2 group"
+              >
+                <span>Curfew Control & Live Monitoring Center</span>
+                <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+              </Link>
             </div>
           </div>
         </div>
@@ -1806,127 +1818,7 @@ export default function WardenDashboard() {
         </div>
       )}
 
-      {/* ── TAB 6: CURFEW COMMAND HUB ───────────────────────────────────────── */}
-      {activeTab === 'curfew' && (
-        <div className="space-y-5">
-          <div className="bg-white rounded-2xl border border-gray-200/80 p-6 shadow-xs flex items-center justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                <Radio className="w-5 h-5 text-indigo-600" />
-                Curfew Automation & Sweeps
-              </h2>
-              <p className="text-xs text-gray-500">Configure timing, trigger sweeps, and inspect curfew breach logs.</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurfewHubTab('control')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
-                  curfewHubTab === 'control' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'
-                }`}
-              >
-                Control & Config
-              </button>
-              <button
-                onClick={() => setCurfewHubTab('history')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
-                  curfewHubTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'
-                }`}
-              >
-                Curfew History Log
-              </button>
-            </div>
-          </div>
 
-          {curfewHubTab === 'control' ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              {/* Quick Sweep Trigger Card */}
-              <div className="bg-white rounded-2xl border border-gray-200/80 p-5 space-y-4">
-                <h3 className="font-bold text-gray-900 text-sm">Manual Curfew Sweep</h3>
-                <p className="text-xs text-gray-500">
-                  Trigger an on-demand sweep across all registered students in this hostel to verify physical presence and flag missing individuals.
-                </p>
-                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200/80 text-xs space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Current Status:</span>
-                    <span className={`font-bold uppercase ${isCurfewActive ? 'text-rose-600' : 'text-emerald-600'}`}>
-                      {isCurfewActive ? 'Active Sweep' : 'Standby'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Configured Hours:</span>
-                    <span className="font-semibold text-gray-800">{curfewConfig.curfewTime} - {curfewConfig.curfewEndTime}</span>
-                  </div>
-                </div>
-
-                <div className="pt-2 flex gap-3">
-                  {isCurfewActive ? (
-                    <button
-                      onClick={handleEndCurfew}
-                      disabled={endingCurfew}
-                      className="w-full py-2.5 rounded-xl bg-rose-600 text-white font-bold text-xs hover:bg-rose-700 disabled:opacity-50"
-                    >
-                      {endingCurfew ? 'Ending Sweep...' : 'Stop Curfew'}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleStartCurfewSweep}
-                      disabled={startingCurfew}
-                      className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-700 disabled:opacity-50"
-                    >
-                      {startingCurfew ? 'Initiating Sweep...' : 'Initiate Manual Sweep'}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Timing Overview Card */}
-              <div className="bg-white rounded-2xl border border-gray-200/80 p-5 space-y-4">
-                <h3 className="font-bold text-gray-900 text-sm">Curfew Schedule Settings</h3>
-                <p className="text-xs text-gray-500">Timing and notification configuration active for this hostel campus.</p>
-                <div className="space-y-2.5 text-xs">
-                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50">
-                    <span className="text-gray-600">Weekday Curfew Starts:</span>
-                    <span className="font-bold text-gray-900 font-mono">{curfewConfig.curfewTime}</span>
-                  </div>
-                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50">
-                    <span className="text-gray-600">Weekend Curfew Starts:</span>
-                    <span className="font-bold text-gray-900 font-mono">{curfewConfig.weekendCurfewTime || '22:00'}</span>
-                  </div>
-                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50">
-                    <span className="text-gray-600">Curfew Ends (Morning):</span>
-                    <span className="font-bold text-gray-900 font-mono">{curfewConfig.curfewEndTime}</span>
-                  </div>
-                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-gray-50">
-                    <span className="text-gray-600">Grace Buffer Duration:</span>
-                    <span className="font-bold text-gray-900">{curfewConfig.gracePeriodMinutes} mins</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-white rounded-2xl border border-gray-200/80 p-6 shadow-xs space-y-4">
-              <h3 className="font-bold text-gray-900 text-sm">Curfew Audit History</h3>
-              {curfewSessions.length === 0 ? (
-                <div className="text-center py-8 text-xs text-gray-500">No curfew sessions logged yet.</div>
-              ) : (
-                <div className="space-y-2">
-                  {curfewSessions.slice(0, 10).map((s: any) => (
-                    <div key={s._id} className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-xs flex justify-between items-center">
-                      <div>
-                        <p className="font-bold text-gray-900">{s.sessionDate ? new Date(s.sessionDate).toLocaleDateString() : 'Session'}</p>
-                        <p className="text-gray-500 text-[11px]">Type: {s.sessionType || 'Automated'}</p>
-                      </div>
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-200 text-gray-700 uppercase">
-                        {s.status}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ── MODAL 1: MARK ATTENDANCE (Quick Action) ─────────────────────────── */}
       {markAttendanceModal.open && (

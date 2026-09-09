@@ -5,6 +5,8 @@ import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard,
+  Bell,
+  Clock,
   Shield,
   ShieldAlert,
   FileCheck2,
@@ -60,9 +62,14 @@ export default function WardenSidebar({ isOpen, onClose }: WardenSidebarProps) {
       icon: UserCheck,
     },
     {
-      label: 'Curfew & Alerts',
-      href: '/warden/alerts',
+      label: 'Curfew Control',
+      href: '/warden/curfew',
       icon: ShieldAlert,
+    },
+    {
+      label: 'Alerts & Broadcasts',
+      href: '/warden/alerts',
+      icon: Bell,
     },
     {
       label: 'Leave & Permissions',
@@ -87,9 +94,8 @@ export default function WardenSidebar({ isOpen, onClose }: WardenSidebarProps) {
     <>
       {/* Mobile backdrop */}
       <div
-        className={`fixed inset-0 bg-black/30 backdrop-blur-sm z-40 lg:hidden transition-all duration-300 ${
-          isOpen ? 'opacity-100 visible' : 'opacity-0 invisible'
-        }`}
+        className={`fixed inset-0 bg-black/30 backdrop-blur-sm z-40 lg:hidden transition-all duration-300 ${isOpen ? 'opacity-100 visible' : 'opacity-0 invisible'
+          }`}
         onClick={onClose}
       />
 

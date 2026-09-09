@@ -1203,7 +1203,9 @@ exports.createUser = async (req, res) => {
     }
 
     // Role escalation protection: non-superadmins CANNOT create 'owner' or 'superadmin' accounts
-    const isSuperAdmin = req.user?.role === 'superadmin';
+    const userRole = Array.isArray(req.user?.role) ? req.user.role[0] : req.user?.role;
+    const isSuperAdmin = userRole === 'superadmin' || (Array.isArray(req.user?.roles) && req.user.roles.includes('superadmin'));
+    const isOwner = userRole === 'owner' || (Array.isArray(req.user?.roles) && req.user.roles.includes('owner'));
     const rawRoles = Array.isArray(roles) && roles.length > 0
       ? roles
       : (Array.isArray(role) ? role : [role || 'student']);
@@ -1236,7 +1238,7 @@ exports.createUser = async (req, res) => {
 
     let resolvedHostelId = hostelId || undefined;
     // Security: Validate hostelId for owner
-    if (req.user?.role === 'owner') {
+    if (isOwner) {
       if (!resolvedHostelId) {
         const ownerHostelIds = await getOwnerHostelIds(req);
         if (ownerHostelIds.length === 1) {
@@ -1286,7 +1288,7 @@ exports.createUser = async (req, res) => {
 
     // Send welcome email
     if (user.email) {
-      const hostel = await Hostel.findById(user.hostelId);
+      const hostel = user.hostelId ? await Hostel.findById(user.hostelId).catch(() => null) : null;
       const hostelName = hostel?.name || 'Hostel';
       const passwordForEmail = tempPassword || originalPassword || 'Please contact admin for password';
       const isStudent = Array.isArray(user.role) ? user.role.includes('student') : user.role === 'student';
@@ -1312,7 +1314,7 @@ exports.createUser = async (req, res) => {
             password: passwordForEmail,
           },
           user.role
-        );
+        ).catch(err => console.error(`Staff welcome email failed for ${user.email}:`, err.message));
       }
     }
 
@@ -1322,7 +1324,18 @@ exports.createUser = async (req, res) => {
 
     res.status(201).json({ success: true, data: userResponse });
   } catch (error) {
-    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+    console.error('[OwnerController] createUser error:', error);
+    let statusCode = error.statusCode;
+    if (!statusCode) {
+      if (error.name === 'ValidationError' || error.name === 'CastError') {
+        statusCode = 400;
+      } else if (error.code === 11000) {
+        statusCode = 409;
+      } else {
+        statusCode = 500;
+      }
+    }
+    res.status(statusCode).json({ success: false, message: error.message });
   }
 };
 
@@ -1392,9 +1405,13 @@ exports.updateUser = async (req, res) => {
     if (!existingUser) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
+    const userRole = Array.isArray(req.user?.role) ? req.user.role[0] : req.user?.role;
+    const isSuperAdmin = userRole === 'superadmin' || (Array.isArray(req.user?.roles) && req.user.roles.includes('superadmin'));
+    const isOwner = userRole === 'owner' || (Array.isArray(req.user?.roles) && req.user.roles.includes('owner'));
+
     if (existingUser.hostelId) {
       await assertOwnsHostel(req, existingUser.hostelId);
-    } else if (req.user?.role === 'owner') {
+    } else if (isOwner) {
       return res.status(403).json({ success: false, message: 'Not authorized to modify this user' });
     }
     if (updateData.hostelId) {
@@ -1402,7 +1419,6 @@ exports.updateUser = async (req, res) => {
     }
 
     // Check if modifying an owner or superadmin by non-superadmin
-    const isSuperAdmin = req.user?.role === 'superadmin';
     const targetRoles = Array.isArray(existingUser.role) ? existingUser.role : [existingUser.role];
     if (!isSuperAdmin && targetRoles.some(r => ['owner', 'superadmin'].includes(String(r).toLowerCase()))) {
       return res.status(403).json({ success: false, message: 'Not authorized to modify owner or superadmin accounts' });
@@ -1483,7 +1499,18 @@ exports.updateUser = async (req, res) => {
     const userObj = user.toObject ? user.toObject() : user;
     res.status(200).json({ success: true, data: userObj });
   } catch (error) {
-    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+    console.error('[OwnerController] updateUser error:', error);
+    let statusCode = error.statusCode;
+    if (!statusCode) {
+      if (error.name === 'ValidationError' || error.name === 'CastError') {
+        statusCode = 400;
+      } else if (error.code === 11000) {
+        statusCode = 409;
+      } else {
+        statusCode = 500;
+      }
+    }
+    res.status(statusCode).json({ success: false, message: error.message });
   }
 };
 

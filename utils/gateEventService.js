@@ -54,6 +54,13 @@ async function logGateEvent(opts) {
     attendanceId: attendanceId || undefined,
     source: ['student', 'warden', 'security', 'auto'].includes(source) ? source : 'student',
   });
+
+  try {
+    const { emitToRole, emitToHostel } = require('../modules/alert/socket/alertSocket');
+    emitToRole('warden', String(hostelId), 'gate:event', { studentId, type, time: t });
+    emitToRole('warden', String(hostelId), 'attendance:update', { studentId, type, time: t });
+    emitToHostel(String(hostelId), 'dashboard:refresh', { type: 'gate_event' });
+  } catch (_) {}
 }
 
 module.exports = { logGateEvent };

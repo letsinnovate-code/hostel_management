@@ -1146,7 +1146,7 @@ exports.createEmergency = async (req, res) => {
 
         const parentEmail = student?.parentContact?.email;
         const parentPhone = student?.parentContact?.phone;
-        const hostelName  = hostel?.name || 'Hostel';
+        const hostelName = hostel?.name || 'Hostel';
         // Use the first emergency contact number from hostel if available
         const hostelContact = hostel?.contactDetails?.emergencyContact
           || hostel?.contactDetails?.phone
@@ -1155,12 +1155,12 @@ exports.createEmergency = async (req, res) => {
         if (parentEmail) {
           const result = await sendParentEmergencyEmail({
             parentEmail,
-            parentName  : student?.parentContact?.name || undefined,
-            studentName : student?.name || 'Your ward',
+            parentName: student?.parentContact?.name || undefined,
+            studentName: student?.name || 'Your ward',
             hostelName,
             emergencyType: emergency.emergencyType,
-            description : description || '',
-            timestamp   : emergency.createdAt,
+            description: description || '',
+            timestamp: emergency.createdAt,
             contactNumber: hostelContact,
           });
 
@@ -1752,7 +1752,16 @@ exports.updateLocation = async (req, res) => {
           attendance.verificationStatus = 'verified';
           await attendance.save();
 
-          CurfewAutomationService.handleStudentReturn(String(req.user.id), checkInTime).catch((err) =>
+          CurfewAutomationService.handleStudentReturn(
+            String(req.user.id),
+            {
+              latitude: location.latitude,
+              longitude: location.longitude,
+              accuracy: accuracy != null ? Number(accuracy) : undefined,
+              distance: distanceFromHostel,
+            },
+            checkInTime
+          ).catch((err) =>
             console.warn('Curfew auto-resolve (auto):', err?.message)
           );
 

@@ -30,7 +30,7 @@ const userSchema = new mongoose.Schema({
   // Optional: multiple roles for staff (e.g. warden + supervisor)
   roles: [{
     type: String,
-    enum: ['warden', 'cleaner', 'supervisor'],
+    enum: ['owner', 'warden', 'cleaner', 'supervisor', 'student', 'security', 'superadmin'],
   }],
   phone: {
     type: String,

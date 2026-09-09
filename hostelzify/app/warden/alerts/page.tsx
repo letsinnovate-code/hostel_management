@@ -332,12 +332,11 @@ export default function WardenAlertsPage() {
               Refresh
             </button>
             <button
-              onClick={triggerCurfew}
-              disabled={triggeringCurfew}
-              className="flex items-center gap-2 px-4 py-2 text-sm bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-lg shadow-sm hover:opacity-90 transition font-medium"
+              onClick={() => router.push('/warden/curfew')}
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg shadow-sm hover:opacity-90 transition font-medium"
             >
-              <Zap className="w-4 h-4" />
-              {triggeringCurfew ? 'Checking…' : 'Run Curfew Check'}
+              <ShieldAlert className="w-4 h-4" />
+              Curfew Control Center
             </button>
           </div>
         </div>
@@ -394,333 +393,45 @@ export default function WardenAlertsPage() {
         {/* ── Tab: Curfew ─────────────────────────────────────────── */}
         {activeTab === 'curfew' && (
           <div className="space-y-6">
-            {/* ── Warden Curfew Schedule & Fully Automatic Engine Controller ── */}
-            <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm relative overflow-hidden">
-              <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap mb-1">
-                    <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200 flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-indigo-600" />
-                      Autonomous Curfew Engine
-                    </span>
-                    {curfewSchedule?.isCurfewActive ? (
-                      <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                        Curfew Active Now (1-Min Automation Running)
-                      </span>
-                    ) : (
-                      <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1.5">
-                        <Clock className="w-3 h-3 text-amber-600" />
-                        Scheduled for {curfewSchedule?.curfewTime || curfewTimeInput}
-                      </span>
-                    )}
-                  </div>
-                  <h3 className="text-xl font-bold text-gray-900">Curfew Start Time &amp; Automatic Alerts</h3>
-                  <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-                    Configure the exact curfew start time. When reached, the system automatically sweeps student presence via geofence, initiates a 15-minute grace period timer for outside students, automatically executes escalations to Warden &amp; Owner when times up, and dispatches parent alerts at 30 minutes. If a student returns inside beforehand, their timer automatically terminates.
-                  </p>
-                </div>
-
-                {/* Time Setter Form */}
-                <div className="flex items-center gap-3 bg-gray-50 p-2.5 rounded-2xl border border-gray-200">
-                  <div className="flex flex-col">
-                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Curfew Start Time</label>
-                    <input
-                      type="time"
-                      value={curfewTimeInput}
-                      onChange={(e) => setCurfewTimeInput(e.target.value)}
-                      className="bg-white border border-gray-300 text-gray-800 text-sm font-bold rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <button
-                    onClick={handleSaveCurfewTime}
-                    disabled={savingCurfewTime || !curfewTimeInput}
-                    className="self-end px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm transition disabled:opacity-50 flex items-center gap-2"
-                  >
-                    <Clock className={`w-3.5 h-3.5 ${savingCurfewTime ? 'animate-spin' : ''}`} />
-                    {savingCurfewTime ? 'Saving…' : 'Save Curfew Time'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Automatic Pipeline Flow */}
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 pt-3 border-t border-gray-100">
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/60">
-                  <span className="text-[10px] font-extrabold text-indigo-600 uppercase">1. Auto Curfew Start</span>
-                  <p className="text-xs font-bold text-gray-800 mt-0.5">{curfewSchedule?.curfewTime || curfewTimeInput}</p>
-                  <p className="text-[11px] text-gray-500 mt-0.5">Automated silent presence scan runs at this exact time daily.</p>
-                </div>
-                <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-200/60">
-                  <span className="text-[10px] font-extrabold text-amber-700 uppercase">2. 15m Grace Period</span>
-                  <p className="text-xs font-bold text-amber-900 mt-0.5">0 - 15 Minutes</p>
-                  <p className="text-[11px] text-amber-700/80 mt-0.5">Timer starts automatically for outside students. Warning sent.</p>
-                </div>
-                <div className="p-3 bg-orange-50/70 rounded-xl border border-orange-200/60">
-                  <span className="text-[10px] font-extrabold text-orange-700 uppercase">3. Auto Escalation</span>
-                  <p className="text-xs font-bold text-orange-900 mt-0.5">15 Minutes</p>
-                  <p className="text-[11px] text-orange-700/80 mt-0.5">Alerts automatically sent to Warden, Student, and Owner.</p>
-                </div>
-                <div className="p-3 bg-rose-50/70 rounded-xl border border-rose-200/60">
-                  <span className="text-[10px] font-extrabold text-rose-700 uppercase">4. Auto Parent Alert</span>
-                  <p className="text-xs font-bold text-rose-900 mt-0.5">30 Minutes</p>
-                  <p className="text-[11px] text-rose-700/80 mt-0.5">Emergency alert to parents dispatches. Terminated if student returns!</p>
-                </div>
-              </div>
-            </div>
-
-            {/* ── Live Countdown Timers & Auto-Termination Monitor ── */}
-            {activeTimers.length > 0 && (
-              <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm space-y-4">
-                <div className="flex items-center justify-between gap-4 flex-wrap">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-red-500 flex items-center justify-center text-white shadow-md">
-                      <Clock className="w-5 h-5 animate-spin" style={{ animationDuration: '6s' }} />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-bold text-gray-900">Live Curfew Countdown Timers</h3>
-                      <p className="text-xs text-gray-500">
-                        Real-time countdowns for grace periods and parent alerts. Timers automatically terminate upon student arrival.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-bold border border-amber-200">
-                      ⏳ Grace Active: {activeTimers.filter((t) => t.timerStatus === 'grace_timer_running').length}
-                    </span>
-                    <span className="px-3 py-1 bg-red-50 text-red-700 rounded-full text-xs font-bold border border-red-200">
-                      🚨 Parent Queue: {activeTimers.filter((t) => t.timerStatus === 'parent_timer_running').length}
-                    </span>
-                    <span className="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full text-xs font-bold border border-emerald-200">
-                      ✅ Auto-Terminated: {activeTimers.filter((t) => t.timerStatus === 'terminated_returned').length}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-2">
-                  {activeTimers.map((timer) => {
-                    const isGrace = timer.timerStatus === 'grace_timer_running';
-                    const isParentWaiting = timer.timerStatus === 'parent_timer_running';
-                    const isTerminated = timer.timerStatus === 'terminated_returned';
-                    const isParentNotified = timer.parentNotified || timer.timerStatus === 'parent_alert_executed';
-
-                    return (
-                      <div
-                        key={timer.violationId}
-                        className={`rounded-2xl p-4 border transition-all ${
-                          isGrace
-                            ? 'bg-gradient-to-br from-amber-50/60 to-yellow-50/30 border-amber-200 shadow-sm'
-                            : isParentWaiting
-                            ? 'bg-gradient-to-br from-red-50/60 to-rose-50/30 border-red-200 shadow-sm'
-                            : isTerminated
-                            ? 'bg-gradient-to-br from-emerald-50/60 to-teal-50/30 border-emerald-200'
-                            : 'bg-gray-50 border-gray-200'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2 mb-2">
-                          <div>
-                            <p className="font-bold text-gray-900 text-sm">{timer.studentName}</p>
-                            <p className="text-[11px] text-gray-500">Room: {timer.roomId}</p>
-                          </div>
-
-                          {isGrace && (
-                            <div className="flex flex-col items-end">
-                              <span className="px-2.5 py-1 rounded-xl bg-amber-500 text-white font-mono text-xs font-black shadow-sm flex items-center gap-1">
-                                <Clock className="w-3 h-3 animate-pulse" />
-                                {fmtCountdown(timer.graceSecondsLeft)}
-                              </span>
-                              <span className="text-[10px] text-amber-700 font-semibold mt-0.5">15m Grace</span>
-                            </div>
-                          )}
-
-                          {isParentWaiting && (
-                            <div className="flex flex-col items-end">
-                              <span className="px-2.5 py-1 rounded-xl bg-red-600 text-white font-mono text-xs font-black shadow-sm flex items-center gap-1 animate-pulse">
-                                <AlertTriangle className="w-3 h-3" />
-                                {fmtCountdown(timer.parentAlertSecondsLeft)}
-                              </span>
-                              <span className="text-[10px] text-red-700 font-semibold mt-0.5">Parent Alert In</span>
-                            </div>
-                          )}
-
-                          {isTerminated && (
-                            <span className="px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 text-[11px] font-bold border border-emerald-300 flex items-center gap-1">
-                              <CheckCircle className="w-3 h-3 text-emerald-600" />
-                              Terminated
-                            </span>
-                          )}
-
-                          {isParentNotified && !isTerminated && (
-                            <span className="px-2 py-0.5 rounded-lg bg-purple-100 text-purple-800 text-[11px] font-bold border border-purple-300 flex items-center gap-1">
-                              <ShieldAlert className="w-3 h-3 text-purple-600" />
-                              Parent Alerted
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Status message */}
-                        <div className="text-xs mt-2 pt-2 border-t border-black/5">
-                          {isGrace && (
-                            <p className="text-amber-800 text-[11px]">
-                              ⚠️ Student is outside. Alerts escalate to Warden &amp; Owner when timer expires.
-                            </p>
-                          )}
-                          {isParentWaiting && (
-                            <p className="text-red-800 text-[11px] font-medium">
-                              🚨 15m grace expired. Alerting parent when countdown reaches 00:00 unless student returns.
-                            </p>
-                          )}
-                          {isTerminated && (
-                            <p className="text-emerald-800 text-[11px] font-medium">
-                              ✅ Student returned inside geofence! Pending alert timers automatically cancelled.
-                            </p>
-                          )}
-                          {isParentNotified && !isTerminated && (
-                            <p className="text-purple-800 text-[11px]">
-                              🚨 30-minute escalation reached: Emergency notification sent to parents.
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* ── Event-Based Curfew & Geofence Presence Command Center ── */}
-            <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-purple-950 rounded-3xl p-6 text-white shadow-xl border border-indigo-500/20 relative overflow-hidden">
-              <div className="absolute top-0 right-0 -mt-8 -mr-8 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-              <div className="relative z-10 space-y-5">
-                <div className="flex items-start justify-between gap-4 flex-wrap">
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap mb-2">
-                      <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 flex items-center gap-1.5">
-                        <Radio className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
-                        Live Event-Based Presence Hub
-                      </span>
-                      <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 flex items-center gap-1.5">
-                        <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-                        Device Geofence: 23.2505° N, 77.4065° E (500m Active Radius)
-                      </span>
-                    </div>
-                    <h2 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
-                      Night Curfew & Morning Attendance
-                    </h2>
-                    <p className="text-sm text-indigo-200/80 max-w-2xl mt-1">
-                      Warden-initiated presence verification. Inside students marked <strong>Present</strong>, approved leaves marked <strong>On Leave</strong>, and outside students trigger a <strong>15-minute grace period</strong> with multi-stage automated escalations.
-                    </p>
-                  </div>
-
-                  {/* Primary Trigger Button */}
-                  <button
-                    onClick={startImmediateCurfew}
-                    disabled={startingImmediateCurfew}
-                    className="px-6 py-3.5 bg-gradient-to-r from-red-600 via-rose-600 to-orange-500 hover:from-red-500 hover:to-orange-400 text-white rounded-2xl font-bold text-sm shadow-lg shadow-red-500/30 transition-all flex items-center gap-3 disabled:opacity-50 transform hover:-translate-y-0.5 active:translate-y-0"
-                  >
-                    <Play className={`w-5 h-5 ${startingImmediateCurfew ? 'animate-spin' : 'fill-current'}`} />
-                    {startingImmediateCurfew ? 'Verifying Presence & Sweeping Geofence…' : 'Start Curfew Immediately'}
-                  </button>
-                </div>
-
-                {/* Multi-Stage Workflow Explainer */}
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2">
-                  <div className="bg-white/5 backdrop-blur-md rounded-xl p-3 border border-white/10">
-                    <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block">Stage 0 • 0 Min</span>
-                    <p className="text-xs font-semibold text-white mt-0.5">Initial Check & Warning</p>
-                    <p className="text-[11px] text-gray-300 mt-1">Immediate warning sent to outside student. 15-min grace started.</p>
-                  </div>
-                  <div className="bg-white/5 backdrop-blur-md rounded-xl p-3 border border-white/10">
-                    <span className="text-[11px] font-bold text-blue-400 uppercase tracking-wider block">Stage 1 • 10 Min</span>
-                    <p className="text-xs font-semibold text-white mt-0.5">GPS & Gate Recheck</p>
-                    <p className="text-[11px] text-gray-300 mt-1">Auto-resolves if returned. Sends 5-min final grace warning if outside.</p>
-                  </div>
-                  <div className="bg-white/5 backdrop-blur-md rounded-xl p-3 border border-white/10">
-                    <span className="text-[11px] font-bold text-orange-400 uppercase tracking-wider block">Stage 2 • 15 Min</span>
-                    <p className="text-xs font-semibold text-white mt-0.5">Warden & Owner Alert</p>
-                    <p className="text-[11px] text-gray-300 mt-1">Grace expires. Violation confirmed. Alert sent to Warden, Student, & Owner.</p>
-                  </div>
-                  <div className="bg-white/5 backdrop-blur-md rounded-xl p-3 border border-white/10">
-                    <span className="text-[11px] font-bold text-rose-400 uppercase tracking-wider block">Stage 3 • 30 Min</span>
-                    <p className="text-xs font-semibold text-white mt-0.5">Parent Escalation</p>
-                    <p className="text-[11px] text-gray-300 mt-1">Emergency email/SMS sent to Parent. Urgent alert sent to Owner.</p>
-                  </div>
-                </div>
-
-                {/* Fast-Forward Simulation Controls */}
-                <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/15 flex items-center justify-between gap-4 flex-wrap">
-                  <div className="flex items-center gap-2">
-                    <FastForward className="w-4 h-4 text-amber-400" />
-                    <span className="text-xs font-bold text-white uppercase tracking-wider">
-                      Simulation & Demo Fast-Forward:
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      onClick={() => simulateTimeline('10min')}
-                      disabled={simulatingStage !== null}
-                      className="px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-200 border border-blue-400/30 rounded-xl text-xs font-semibold transition disabled:opacity-50 flex items-center gap-1.5"
-                    >
-                      {simulatingStage === '10min' ? 'Processing…' : '⏱️ Test 10m Recheck'}
-                    </button>
-                    <button
-                      onClick={() => simulateTimeline('15min')}
-                      disabled={simulatingStage !== null}
-                      className="px-3 py-1.5 bg-orange-500/20 hover:bg-orange-500/30 text-orange-200 border border-orange-400/30 rounded-xl text-xs font-semibold transition disabled:opacity-50 flex items-center gap-1.5"
-                    >
-                      {simulatingStage === '15min' ? 'Processing…' : '⚠️ Test 15m Escalation (Warden & Owner)'}
-                    </button>
-                    <button
-                      onClick={() => simulateTimeline('30min')}
-                      disabled={simulatingStage !== null}
-                      className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-400/30 rounded-xl text-xs font-semibold transition disabled:opacity-50 flex items-center gap-1.5"
-                    >
-                      {simulatingStage === '30min' ? 'Processing…' : '🚨 Test 30m Parent Alert'}
-                    </button>
-                    <button
-                      onClick={() => simulateTimeline('all')}
-                      disabled={simulatingStage !== null}
-                      className="px-3 py-1.5 bg-purple-500/30 hover:bg-purple-500/40 text-purple-100 border border-purple-400/40 rounded-xl text-xs font-bold transition disabled:opacity-50 flex items-center gap-1.5"
-                    >
-                      {simulatingStage === 'all' ? 'Running…' : '⚡ Run All Stages'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Live Sweep Summary Banner (if active) */}
-            {sweepSummary && (
-              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center justify-between gap-4 flex-wrap">
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-bold text-emerald-900">Curfew Presence Verification Sweep Completed</p>
-                    <p className="text-xs text-emerald-700">
-                      Inside students confirmed Present, approved leaves exempted, and outside students issued 0m grace warning.
-                    </p>
-                  </div>
-                </div>
+            {/* ── Curfew Control Banner ── */}
+            <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-purple-950 rounded-3xl p-6 sm:p-8 text-white shadow-xl border border-indigo-500/20 relative overflow-hidden flex items-center justify-between gap-6 flex-wrap">
+              <div className="space-y-2 max-w-xl">
                 <div className="flex items-center gap-2">
-                  <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-lg text-xs font-bold">
-                    🟢 Present: {sweepSummary.present?.length ?? sweepSummary.present ?? 0}
+                  <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 flex items-center gap-1.5">
+                    <ShieldAlert className="w-3.5 h-3.5 text-indigo-400" />
+                    Dedicated Monitoring Center
                   </span>
-                  <span className="px-2.5 py-1 bg-amber-100 text-amber-800 rounded-lg text-xs font-bold">
-                    🟡 On Leave: {sweepSummary.onLeave?.length ?? sweepSummary.onLeave ?? 0}
-                  </span>
-                  <span className="px-2.5 py-1 bg-rose-100 text-rose-800 rounded-lg text-xs font-bold">
-                    🟠 In Grace: {sweepSummary.outside?.length ?? sweepSummary.initiated ?? 0}
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                    Live Geofence Active
                   </span>
                 </div>
+                <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+                  Curfew Control &amp; Live Monitoring Center
+                </h2>
+                <p className="text-sm text-indigo-200/80 leading-relaxed">
+                  Full control over start dates, end dates, overnight curfews, recurrences, automated 15-minute multi-stage escalations, live radar map, and historical session logs.
+                </p>
               </div>
-            )}
 
-            {/* Filter Pills & Manual Trigger */}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => router.push('/warden/curfew')}
+                  className="px-6 py-3.5 bg-gradient-to-r from-indigo-500 via-purple-600 to-pink-500 hover:opacity-95 text-white rounded-2xl font-bold text-sm shadow-xl shadow-indigo-500/30 transition-all flex items-center gap-2 transform hover:-translate-y-0.5 active:translate-y-0"
+                >
+                  <ShieldAlert className="w-5 h-5" />
+                  Launch Curfew Control Center
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Pills */}
             <div className="flex items-center justify-between gap-3 flex-wrap bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
               <div className="flex items-center gap-1.5 flex-wrap">
                 {[
                   { id: 'all', label: 'All Records' },
-                  { id: 'pending_recheck', label: '⏳ 15m Grace Period (Stage 0)' },
-                  { id: 'open', label: '🚨 Confirmed Breaches (Stage 1 & 2)' },
+                  { id: 'pending_recheck', label: '⏳ 15m Grace Period' },
+                  { id: 'open', label: '🚨 Confirmed Violations' },
                   { id: 'resolved', label: '✅ Resolved & Present' },
                 ].map((f) => (
                   <button
@@ -736,14 +447,6 @@ export default function WardenAlertsPage() {
                   </button>
                 ))}
               </div>
-              <button
-                onClick={triggerCurfew}
-                disabled={triggeringCurfew}
-                className="flex items-center gap-2 px-3.5 py-1.5 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg font-semibold transition disabled:opacity-50"
-              >
-                <Zap className={`w-3.5 h-3.5 ${triggeringCurfew ? 'animate-spin' : 'text-indigo-600'}`} />
-                {triggeringCurfew ? 'Verifying Presence…' : 'Quick Geofence Re-Check'}
-              </button>
             </div>
 
             {curfewViolations.length === 0 ? (

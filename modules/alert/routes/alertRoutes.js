@@ -160,48 +160,38 @@ router.post(
 );
 
 /**
+ * POST /api/alerts/curfew/start-manual
+ * Warden or Owner starts curfew immediately.
+ */
+router.post(
+  '/curfew/start-manual',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.startManualCurfew
+);
+
+/**
  * POST /api/alerts/curfew/start-immediate
- * Warden initiates event-based curfew sweep & presence verification immediately.
+ * Backward-compatible alias for starting immediate curfew.
  */
 router.post(
   '/curfew/start-immediate',
   authorize('warden', 'owner', 'superadmin'),
-  ctrl.startImmediateWardenCurfew
+  ctrl.startManualCurfew
 );
 
 /**
- * POST /api/alerts/curfew/simulate-timeline
- * Advance or test curfew timeline stages (10min, 15min, 30min).
+ * POST /api/alerts/curfew/end-manual
+ * Warden or Owner ends curfew immediately.
  */
 router.post(
-  '/curfew/simulate-timeline',
+  '/curfew/end-manual',
   authorize('warden', 'owner', 'superadmin'),
-  ctrl.simulateCurfewTimeline
-);
-
-/**
- * POST /api/alerts/curfew/set-time
- * Warden or Owner sets or updates hostel curfew schedule.
- */
-router.post(
-  '/curfew/set-time',
-  authorize('warden', 'owner', 'superadmin'),
-  ctrl.setCurfewTime
-);
-
-/**
- * GET /api/alerts/curfew/active-timers
- * Fetch active grace period and parent alert countdown timers for a hostel.
- */
-router.get(
-  '/curfew/active-timers',
-  authorize('warden', 'owner', 'superadmin'),
-  ctrl.getActiveCurfewTimers
+  ctrl.endCurfew
 );
 
 /**
  * POST /api/alerts/curfew/end
- * Warden or Owner ends active curfew immediately.
+ * Alias for ending active curfew.
  */
 router.post(
   '/curfew/end',
@@ -210,8 +200,18 @@ router.post(
 );
 
 /**
+ * POST /api/alerts/curfew/reset
+ * Warden or Owner resets curfew schedule (deactivates future, preserves history).
+ */
+router.post(
+  '/curfew/reset',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.resetCurfew
+);
+
+/**
  * GET /api/alerts/curfew/config
- * Fetch curfew & alert timing/recipient config.
+ * Fetch curfew configuration for hostel.
  */
 router.get(
   '/curfew/config',
@@ -221,7 +221,7 @@ router.get(
 
 /**
  * POST /api/alerts/curfew/config
- * Update curfew & alert timing/recipient config.
+ * Set curfew configuration (dates, times, recurrence, grace, escalation).
  */
 router.post(
   '/curfew/config',
@@ -230,13 +230,42 @@ router.post(
 );
 
 /**
+ * GET /api/alerts/curfew/active-session
+ * Fetch active session, remaining countdown, summary metrics, and student statuses.
+ */
+router.get(
+  '/curfew/active-session',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.getActiveCurfewSession
+);
+
+/**
+ * GET /api/alerts/curfew/students
+ * Student monitoring table with live filters.
+ */
+router.get(
+  '/curfew/students',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.getCurfewStudents
+);
+
+/**
  * GET /api/alerts/curfew/history
- * Fetch historical curfew sessions and student violation audit records.
+ * Fetch historical curfew sessions and audit records.
  */
 router.get(
   '/curfew/history',
   authorize('warden', 'owner', 'superadmin'),
   ctrl.getCurfewHistory
+);
+
+/**
+ * POST /api/alerts/curfew/location-update
+ * Student submits current GPS location for curfew verification.
+ */
+router.post(
+  '/curfew/location-update',
+  ctrl.submitStudentCurfewLocation
 );
 
 /**

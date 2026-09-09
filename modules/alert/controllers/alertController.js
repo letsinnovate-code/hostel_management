@@ -83,7 +83,7 @@ async function getAuthorizedHostelScope(req) {
       try {
         const uDoc = await User.findById(userId).select('hostelId').lean();
         if (uDoc?.hostelId) wardenHostelId = String(uDoc.hostelId);
-      } catch (_) {}
+      } catch (_) { }
     }
 
     if (wardenHostelId && requestedHostelId && String(requestedHostelId) !== wardenHostelId) {
@@ -1012,28 +1012,57 @@ exports.escalateCurfewViolation = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────
-// POST /api/alerts/curfew/end
-// Warden or Owner explicitly concludes / stops active curfew
 // ─────────────────────────────────────────────
-exports.endCurfew = async (req, res) => {
+// POST /api/alerts/curfew/start-manual
+// Warden or Owner starts curfew immediately
+// ─────────────────────────────────────────────
+exports.startManualCurfew = async (req, res) => {
   try {
     const scope = await getAuthorizedHostelScope(req);
-    const hostelId = req.body?.hostelId || scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds?.[0]);
-    const userId = req.user?._id || req.user?.id;
-    const { note } = req.body;
+    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds?.[0]);
 
     if (!hostelId) {
       return res.status(400).json({ success: false, message: 'hostelId is required and must be authorized' });
     }
 
-    const result = await CurfewAutomationService.endCurfewSession(hostelId, userId, { note });
+    const session = await CurfewAutomationService.startCurfew(hostelId, {
+      triggerType: 'MANUAL',
+      user: req.user,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Curfew started immediately! Student presence evaluated.',
+      data: session,
+    });
+  } catch (err) {
+    console.error('[Alert API] Error starting manual curfew:', err);
+    res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────
+// POST /api/alerts/curfew/end
+// Warden or Owner terminates active curfew
+// ─────────────────────────────────────────────
+exports.endCurfew = async (req, res) => {
+  try {
+    const scope = await getAuthorizedHostelScope(req);
+    const hostelId = req.body?.hostelId || scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds?.[0]);
+
+    if (!hostelId) {
+      return res.status(400).json({ success: false, message: 'hostelId is required and must be authorized' });
+    }
+
+    const result = await CurfewAutomationService.endCurfew(hostelId, {
+      user: req.user,
+      reason: req.body?.reason || 'warden_manual',
+    });
 
     res.status(200).json({
       success: true,
       message: result.message,
       data: result.session,
-      isCurfewActive: false,
-      manualCurfewEndedAt: result.manualCurfewEndedAt,
     });
   } catch (err) {
     console.error('[Alert API] Error ending curfew session:', err);
@@ -1043,22 +1072,25 @@ exports.endCurfew = async (req, res) => {
 
 // ─────────────────────────────────────────────
 // GET /api/alerts/curfew/config
-// Fetch complete curfew and alert configuration
+// Fetch active curfew configuration
 // ─────────────────────────────────────────────
 exports.getCurfewConfig = async (req, res) => {
   try {
     const scope = await getAuthorizedHostelScope(req);
-    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds[0]);
+    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds?.[0]);
 
     if (!hostelId) {
       return res.status(400).json({ success: false, message: 'hostelId is required and must be authorized' });
     }
 
-    const config = await CurfewAutomationService.getCurfewConfig(hostelId);
+    const CurfewConfiguration = require('../models/CurfewConfiguration');
+    const config = await CurfewConfiguration.findOne({ hostelId, isActive: true })
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.status(200).json({
       success: true,
-      data: config,
+      data: config || null,
     });
   } catch (err) {
     console.error('[Alert API] Error fetching curfew config:', err);
@@ -1068,38 +1100,106 @@ exports.getCurfewConfig = async (req, res) => {
 
 // ─────────────────────────────────────────────
 // POST /api/alerts/curfew/config
-// Update complete curfew schedule & alert rules
+// Configure Curfew Schedule (Start/End Date/Time, Recurrence, Grace, Escalation)
 // ─────────────────────────────────────────────
 exports.updateCurfewConfig = async (req, res) => {
   try {
     const scope = await getAuthorizedHostelScope(req);
-    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds[0]);
+    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds?.[0]);
 
     if (!hostelId) {
       return res.status(400).json({ success: false, message: 'hostelId is required and must be authorized' });
     }
 
-    const result = await CurfewAutomationService.setCurfewFullConfig(hostelId, req.body);
+    const result = await CurfewAutomationService.setCurfewSchedule(hostelId, req.body, req.user);
+
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('[Alert API] Error setting curfew schedule:', err);
+    res.status(err.statusCode || 400).json({ success: false, message: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────
+// POST /api/alerts/curfew/reset
+// Reset Curfew configuration & future scheduled execution
+// ─────────────────────────────────────────────
+exports.resetCurfew = async (req, res) => {
+  try {
+    const scope = await getAuthorizedHostelScope(req);
+    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds?.[0]);
+
+    if (!hostelId) {
+      return res.status(400).json({ success: false, message: 'hostelId is required and must be authorized' });
+    }
+
+    const result = await CurfewAutomationService.resetCurfew(hostelId, req.user);
+
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('[Alert API] Error resetting curfew:', err);
+    res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────
+// GET /api/alerts/curfew/active-session
+// Real-time active curfew session, remaining countdown, and summary
+// ─────────────────────────────────────────────
+exports.getActiveCurfewSession = async (req, res) => {
+  try {
+    const scope = await getAuthorizedHostelScope(req);
+    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds?.[0]);
+
+    if (!hostelId) {
+      return res.status(400).json({ success: false, message: 'hostelId is required and must be authorized' });
+    }
+
+    const data = await CurfewAutomationService.getActiveSessionData(hostelId);
 
     res.status(200).json({
       success: true,
-      message: result.message,
-      data: result.rules,
+      data,
     });
   } catch (err) {
-    console.error('[Alert API] Error updating curfew config:', err);
+    console.error('[Alert API] Error getting active curfew session:', err);
+    res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────
+// GET /api/alerts/curfew/students
+// Student monitoring table with live filters
+// ─────────────────────────────────────────────
+exports.getCurfewStudents = async (req, res) => {
+  try {
+    const scope = await getAuthorizedHostelScope(req);
+    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds?.[0]);
+
+    if (!hostelId) {
+      return res.status(400).json({ success: false, message: 'hostelId is required and must be authorized' });
+    }
+
+    const data = await CurfewAutomationService.getCurfewStudents(hostelId, req.query);
+
+    res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (err) {
+    console.error('[Alert API] Error getting curfew students:', err);
     res.status(err.statusCode || 500).json({ success: false, message: err.message });
   }
 };
 
 // ─────────────────────────────────────────────
 // GET /api/alerts/curfew/history
-// Fetch curfew session history & student violation audit records
+// Fetch curfew session history & audit records
 // ─────────────────────────────────────────────
 exports.getCurfewHistory = async (req, res) => {
   try {
     const scope = await getAuthorizedHostelScope(req);
-    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds[0]);
+    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds?.[0]);
 
     if (!hostelId) {
       return res.status(400).json({ success: false, message: 'hostelId is required and must be authorized' });
@@ -1118,6 +1218,39 @@ exports.getCurfewHistory = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────
+// POST /api/alerts/curfew/location-update
+// Student submits current location for live curfew presence evaluation
+// ─────────────────────────────────────────────
+exports.submitStudentCurfewLocation = async (req, res) => {
+  try {
+    const studentId = String(req.user.id || req.user._id);
+    const { latitude, longitude, accuracy, timestamp } = req.body.location || req.body;
+
+    if (latitude == null || longitude == null) {
+      return res.status(400).json({ success: false, message: 'Latitude and longitude are required' });
+    }
+
+    const locationData = {
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      accuracy: accuracy != null ? Number(accuracy) : undefined,
+      timestamp: timestamp ? new Date(timestamp) : new Date(),
+    };
+
+    const returned = await CurfewAutomationService.handleStudentReturn(studentId, locationData, locationData.timestamp);
+
+    res.status(200).json({
+      success: true,
+      message: returned ? 'Presence verified: inside hostel' : 'Location recorded',
+      returned,
+    });
+  } catch (err) {
+    console.error('[Alert API] Error submitting curfew location:', err);
+    res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────
 // DELETE /api/alerts/curfew/:id
 // Delete a curfew violation record
 // ─────────────────────────────────────────────
@@ -1125,7 +1258,7 @@ exports.deleteCurfewViolation = async (req, res) => {
   try {
     const { id } = req.params;
     const scope = await getAuthorizedHostelScope(req);
-    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds[0]);
+    const hostelId = scope.singleHostelId || (scope.isOwner && scope.ownedHostelIds?.[0]);
 
     const CurfewViolation = require('../models/CurfewViolation');
     const record = await CurfewViolation.findById(id);
@@ -1144,4 +1277,5 @@ exports.deleteCurfewViolation = async (req, res) => {
     res.status(err.statusCode || 500).json({ success: false, message: err.message });
   }
 };
+
 

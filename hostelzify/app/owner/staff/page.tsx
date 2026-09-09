@@ -114,8 +114,15 @@ export default function StaffPage() {
       }));
       setStaff((prev) => (normalizedStaff.length > 0 ? normalizedStaff : prev));
       setHostels((prev) => (hostelsArray.length > 0 ? hostelsArray : prev.length === 0 ? [] : prev));
+      if (hostelsArray.length > 0) {
+        setFormData((prev) => ({
+          ...prev,
+          hostelId: prev.hostelId || hostelsArray[0]._id || hostelsArray[0].id || '',
+        }));
+      }
     } catch (error: any) {
-      showToast(error.message || 'Failed to load data', 'error');
+      const errorMsg = error.response?.data?.message || error.message || 'Failed to load data';
+      showToast(errorMsg, 'error');
     } finally {
       if (!options?.silent) setLoading(false);
     }
@@ -137,6 +144,8 @@ export default function StaffPage() {
       return;
     }
 
+    const effectiveHostelId = formData.hostelId || (hostels.length > 0 ? (hostels[0]._id || hostels[0].id) : undefined);
+
     setSubmitting(true);
     try {
       const staffRoles = formData.roles?.length ? formData.roles : [formData.role];
@@ -148,7 +157,7 @@ export default function StaffPage() {
           phone: formData.phone,
           role: staffRoles,
           roles: staffRoles,
-          hostelId: formData.hostelId || undefined,
+          hostelId: effectiveHostelId,
           status: formData.status,
         };
         const newPassword = (formData.password || '').trim();
@@ -156,7 +165,7 @@ export default function StaffPage() {
         await api.updateUser(editingStaff._id, updateData);
         showToast('Staff member updated successfully', 'success');
         // Optimistic update: keep table populated with edited row so it never goes empty
-        const hostel = hostels.find((h) => (h._id || h.id) === formData.hostelId);
+        const hostel = hostels.find((h) => (h._id || h.id) === effectiveHostelId);
         setStaff((prev) =>
           prev.map((m) =>
             m._id === editingStaff._id
@@ -180,7 +189,7 @@ export default function StaffPage() {
           ...formData,
           role: staffRoles,
           roles: staffRoles,
-          hostelId: formData.hostelId || undefined,
+          hostelId: effectiveHostelId,
         });
         showToast('Staff member created successfully', 'success');
         setShowCreateModal(false);
@@ -188,7 +197,8 @@ export default function StaffPage() {
         await loadData({ silent: true });
       }
     } catch (error: any) {
-      showToast(error.message || 'Failed to save staff member', 'error');
+      const errorMsg = error.response?.data?.message || error.message || 'Failed to save staff member';
+      showToast(errorMsg, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -744,18 +754,22 @@ export default function StaffPage() {
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">
-                      Hostel
+                      Hostel <span className="text-red-500">*</span>
                     </label>
                     <select
-                      value={formData.hostelId}
+                      value={formData.hostelId || (hostels.length > 0 ? (hostels[0]._id || hostels[0].id) : '')}
                       onChange={(e) => setFormData({ ...formData, hostelId: e.target.value })}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
-                      {hostels.map((hostel, index) => (
-                        <option key={hostel._id || hostel.id} value={hostel._id || hostel.id}>
-                          {hostel.name}
-                        </option>
-                      ))}
+                      {hostels.length === 0 ? (
+                        <option value="">No hostels available</option>
+                      ) : (
+                        hostels.map((hostel) => (
+                          <option key={hostel._id || hostel.id} value={hostel._id || hostel.id}>
+                            {hostel.name}
+                          </option>
+                        ))
+                      )}
                     </select>
                   </div>
                   <div>

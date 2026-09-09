@@ -41,6 +41,7 @@ export interface CurfewViolation {
   locationMethod?: 'gps' | 'attendance' | 'manual' | 'none';
   resolutionNote?: string;
   studentReturnedAt?: string;
+  minutesMissing?: number;
   alertId?: string;
   createdAt: string;
 }
@@ -102,6 +103,122 @@ export interface ActiveTimersResponse {
   activeTimersCount: number;
   terminatedCount: number;
   timers: CurfewTimerInfo[];
+}
+
+export interface CurfewConfigurationData {
+  _id?: string;
+  hostelId: string;
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  durationMinutes: number;
+  durationDisplay: string;
+  recurrence: {
+    type: 'one_time' | 'daily' | 'selected_days' | 'weekly' | 'monthly' | 'custom';
+    selectedDays: string[];
+  };
+  gracePeriodMinutes: number;
+  escalationPeriodMinutes: number;
+  timezone: string;
+  isActive: boolean;
+  status: 'active' | 'inactive' | 'scheduled' | 'ended' | 'cancelled';
+  configuredBy?: any;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CurfewStudentMonitoringData {
+  _id: string;
+  curfewSessionId: string;
+  studentId: {
+    _id: string;
+    name: string;
+    studentId?: string;
+    roomId?: string;
+    email?: string;
+    phone?: string;
+  } | string;
+  studentName?: string;
+  studentRegId?: string;
+  studentPhone?: string;
+  hostelId: string;
+  roomNumber: string;
+  block?: string;
+  status:
+    | 'INSIDE'
+    | 'OUTSIDE_GRACE'
+    | 'LATE_COMER'
+    | 'VIOLATION'
+    | 'VIOLATION_RESOLVED'
+    | 'LOCATION_UNAVAILABLE'
+    | 'LOCATION_PERMISSION_DENIED'
+    | 'LOCATION_STALE'
+    | 'LOW_ACCURACY'
+    | 'ON_LEAVE';
+  initialLocation?: { latitude: number; longitude: number; accuracy?: number; timestamp?: string };
+  currentLocation?: { latitude: number; longitude: number; accuracy?: number; timestamp?: string };
+  currentAccuracy?: number;
+  lastLocationAt?: string;
+  distanceFromHostel?: number;
+  locationSource?: string;
+  outsideSince?: string;
+  graceDeadline?: string;
+  secondCountdownDeadline?: string;
+  thirdCountdownDeadline?: string;
+  graceSecondsLeft?: number;
+  secondSecondsLeft?: number;
+  returnedAt?: string;
+  entryTime?: string;
+  entryLocation?: { latitude: number; longitude: number; accuracy?: number; distance?: number };
+  delayMinutes?: number;
+  totalTimeOutsideMinutes?: number;
+  resolutionStatus?: 'NONE' | 'RETURNED_GRACE' | 'RETURNED_AFTER_VIOLATION' | 'MANUAL_RESOLVED';
+  resolutionNote?: string;
+}
+
+export interface ActiveCurfewSessionResponse {
+  hostelId: string;
+  hostelName: string;
+  hostelAddress?: any;
+  timezone: string;
+  status: 'ACTIVE' | 'SCHEDULED' | 'INACTIVE' | 'ENDED' | 'CANCELLED';
+  session?: {
+    _id: string;
+    hostelId: string;
+    scheduledStartAt?: string;
+    actualStartAt?: string;
+    scheduledEndAt?: string;
+    actualEndAt?: string;
+    curfewStartTime?: string;
+    curfewEndTime?: string;
+    status: string;
+    triggerType: string;
+    summary: {
+      totalStudents: number;
+      presentCount: number;
+      outsideCount: number;
+      lateComersCount: number;
+      onLeaveCount: number;
+      violationsCount: number;
+      resolvedCount: number;
+      parentAlertsCount: number;
+    };
+    notes?: string;
+  } | null;
+  configuration?: CurfewConfigurationData | null;
+  remainingSeconds: number;
+  summary: {
+    totalStudents: number;
+    presentCount: number;
+    outsideCount: number;
+    lateComersCount: number;
+    onLeaveCount: number;
+    violationsCount: number;
+    resolvedCount: number;
+    parentAlertsCount: number;
+  };
+  students: CurfewStudentMonitoringData[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -207,26 +324,6 @@ class AlertApiService {
     return response.data;
   }
 
-  async endCurfew(hostelId?: string, note?: string) {
-    const response = await this.api.post('/alerts/curfew/end', { hostelId, note });
-    return response.data;
-  }
-
-  async getCurfewConfig(hostelId?: string) {
-    const response = await this.api.get('/alerts/curfew/config', { params: { hostelId } });
-    return response.data;
-  }
-
-  async updateCurfewConfig(hostelId?: string, config?: any) {
-    const response = await this.api.post('/alerts/curfew/config', { hostelId, ...config });
-    return response.data;
-  }
-
-  async getCurfewHistory(hostelId?: string, params?: { page?: number; limit?: number; date?: string; status?: string; search?: string }) {
-    const response = await this.api.get('/alerts/curfew/history', { params: { hostelId, ...params } });
-    return response.data;
-  }
-
   async deleteCurfewViolation(violationId: string) {
     const response = await this.api.delete(`/alerts/curfew/${violationId}`);
     return response.data;
@@ -289,6 +386,66 @@ class AlertApiService {
     targetRoles?: string[];
   }) {
     const response = await this.api.post('/alerts/send-to-all', data);
+    return response.data;
+  }
+
+  // ── Modern Curfew Control Center & Live Presence Engine ───────────────────
+  async getCurfewConfig(hostelId?: string) {
+    const response = await this.api.get('/alerts/curfew/config', { params: { hostelId } });
+    return response.data;
+  }
+
+  async setCurfewConfig(hostelId: string, payload: any) {
+    const response = await this.api.post('/alerts/curfew/config', { ...payload, hostelId });
+    return response.data;
+  }
+
+  async resetCurfew(hostelId: string) {
+    const response = await this.api.post('/alerts/curfew/reset', { hostelId });
+    return response.data;
+  }
+
+  async startManualCurfew(hostelId: string) {
+    const response = await this.api.post('/alerts/curfew/start-manual', { hostelId });
+    return response.data;
+  }
+
+  async endCurfew(hostelId: string, reason = 'warden_manual') {
+    const response = await this.api.post('/alerts/curfew/end', { hostelId, reason });
+    return response.data;
+  }
+
+  async getActiveCurfewSession(hostelId: string): Promise<{ success: boolean; data: ActiveCurfewSessionResponse }> {
+    const response = await this.api.get('/alerts/curfew/active-session', { params: { hostelId } });
+    return response.data;
+  }
+
+  async getCurfewStudents(params: {
+    hostelId?: string;
+    status?: string;
+    room?: string;
+    block?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const response = await this.api.get('/alerts/curfew/students', { params });
+    return response.data;
+  }
+
+  async getCurfewHistory(hostelIdOrParams?: string | any, queryParams?: any) {
+    let params: any = {};
+    if (typeof hostelIdOrParams === 'string') {
+      params = { hostelId: hostelIdOrParams, ...(queryParams || {}) };
+    } else if (hostelIdOrParams && typeof hostelIdOrParams === 'object') {
+      params = { ...hostelIdOrParams, ...(queryParams || {}) };
+    }
+    const response = await this.api.get('/alerts/curfew/history', { params });
+    return response.data;
+  }
+
+  async submitStudentCurfewLocation(location: { latitude: number; longitude: number; accuracy?: number; timestamp?: string }) {
+    const response = await this.api.post('/alerts/curfew/location-update', { location });
     return response.data;
   }
 }

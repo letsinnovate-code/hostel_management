@@ -28,24 +28,38 @@ export interface LiveAlert {
   createdAt?: string;
 }
 
+export interface SocketEventPayload {
+  type: string;
+  data: any;
+  timestamp: number;
+}
+
 interface AlertSocketContextType {
+  socket: Socket | null;
   connected: boolean;
   unreadCount: number;
   latestAlert: LiveAlert | null;
-  lastCurfewEvent: { type: string; data: any; timestamp: number } | null;
+  lastCurfewEvent: SocketEventPayload | null;
+  lastOperationalEvent: SocketEventPayload | null;
+  refreshKey: number;
+  triggerRefresh: () => void;
   incrementUnread: () => void;
   decrementUnread: (by?: number) => void;
-  setUnreadCount: (n: number) => void;
+  setUnreadCount: (n: number | ((prev: number) => number)) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Context
 // ─────────────────────────────────────────────────────────────────────────────
 const AlertSocketContext = createContext<AlertSocketContextType>({
+  socket: null,
   connected: false,
   unreadCount: 0,
   latestAlert: null,
   lastCurfewEvent: null,
+  lastOperationalEvent: null,
+  refreshKey: 0,
+  triggerRefresh: () => {},
   incrementUnread: () => {},
   decrementUnread: () => {},
   setUnreadCount: () => {},
@@ -84,10 +98,17 @@ const getSocketEndpoint = (): string | null => {
 
 export function AlertSocketProvider({ children }: { children: ReactNode }) {
   const socketRef = useRef<Socket | null>(null);
+  const [socketInstance, setSocketInstance] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [latestAlert, setLatestAlert] = useState<LiveAlert | null>(null);
-  const [lastCurfewEvent, setLastCurfewEvent] = useState<{ type: string; data: any; timestamp: number } | null>(null);
+  const [lastCurfewEvent, setLastCurfewEvent] = useState<SocketEventPayload | null>(null);
+  const [lastOperationalEvent, setLastOperationalEvent] = useState<SocketEventPayload | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const triggerRefresh = useCallback(() => {
+    setRefreshKey((k) => k + 1);
+  }, []);
 
   const incrementUnread = useCallback(() => setUnreadCount((c) => c + 1), []);
   const decrementUnread = useCallback(
@@ -113,12 +134,13 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
     const socket = io(socketEndpoint, {
       auth: { token },
       transports: ['polling', 'websocket'],
-      reconnectionAttempts: 3,
-      reconnectionDelay: 3000,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 2000,
       timeout: 10000,
     });
 
     socketRef.current = socket;
+    setSocketInstance(socket);
 
     // ── Connection ──────────────────────────────────────────────────────────
     socket.on('connect', () => {
@@ -128,7 +150,6 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
 
     socket.on('connect_error', (err) => {
       setConnected(false);
-      // Suppress unhandled connection crash
       console.warn('[AlertSocket] Connection issue:', err.message);
     });
 
@@ -146,6 +167,7 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
       const alert = data.alert;
       setLatestAlert(alert);
       setUnreadCount((c) => c + 1);
+      setRefreshKey((k) => k + 1);
       toastManager.show(
         `🔔 ${alert.title}: ${alert.message.slice(0, 80)}`,
         priorityToast(alert.priority) as any,
@@ -153,9 +175,40 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
       );
     });
 
-    // ── Curfew violation ────────────────────────────────────────────────────
+    // ── Curfew events ───────────────────────────────────────────────────────
+    socket.on('curfew:started', (data: any) => {
+      setLastCurfewEvent({ type: 'curfew:started', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+      toastManager.show('🌙 Curfew Session Started: Presence monitoring is now active.', 'info', 5000);
+    });
+
+    socket.on('curfew:ended', (data: any) => {
+      setLastCurfewEvent({ type: 'curfew:ended', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+      toastManager.show('🛑 Curfew session concluded.', 'info', 4000);
+    });
+
+    socket.on('curfew:reset', (data: any) => {
+      setLastCurfewEvent({ type: 'curfew:reset', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+      toastManager.show('🔄 Curfew schedule and state reset.', 'info', 4000);
+    });
+
+    socket.on('curfew:schedule_updated', (data: any) => {
+      setLastCurfewEvent({ type: 'curfew:schedule_updated', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+      const timeStr = data.configuration?.startTime || data.curfewTime || '';
+      toastManager.show(`⏰ Curfew Schedule Updated${timeStr ? `: Starts at ${timeStr}` : ''}`, 'info', 4000);
+    });
+
+    socket.on('curfew:student_status_update', (data: any) => {
+      setLastCurfewEvent({ type: 'curfew:student_status_update', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+    });
+
     socket.on('curfew:violation', (data: { violation: any }) => {
       setLastCurfewEvent({ type: 'curfew:violation', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
       toastManager.show(
         `⚠️ Curfew Violation: ${data.violation?.studentId?.name ?? 'A student'} is outside after curfew`,
         'warning',
@@ -163,9 +216,9 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
       );
     });
 
-    // ── Curfew timer auto-terminated (student returned inside geofence) ──────
     socket.on('curfew:timer_terminated', (data: { studentName?: string; reason?: string }) => {
       setLastCurfewEvent({ type: 'curfew:timer_terminated', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
       toastManager.show(
         `✅ Timer Terminated: ${data.studentName || 'Student'} returned inside geofence`,
         'success',
@@ -173,29 +226,30 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
       );
     });
 
-    // ── Curfew escalation (15m grace expired or parent notified) ────────────
     socket.on('curfew:escalated', (data: { studentName?: string; message?: string }) => {
       setLastCurfewEvent({ type: 'curfew:escalated', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
       toastManager.show(
-        `🚨 Curfew Escalation: ${data.studentName || 'Student'} - ${data.message || '15m grace expired'}`,
+        `🚨 Curfew Escalation: ${data.studentName || 'Student'} - ${data.message || 'Grace period expired'}`,
         'error',
         8000
       );
     });
 
-    // ── Curfew schedule updated ─────────────────────────────────────────────
-    socket.on('curfew:schedule_updated', (data: { curfewTime: string }) => {
-      setLastCurfewEvent({ type: 'curfew:schedule_updated', data, timestamp: Date.now() });
-      toastManager.show(
-        `⏰ Curfew Schedule Updated: Starts at ${data.curfewTime}`,
-        'info',
-        4000
-      );
+    socket.on('curfew:escalation_alert', (data: { studentName?: string; message?: string }) => {
+      setLastCurfewEvent({ type: 'curfew:escalation_alert', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
     });
 
-    // ── Curfew sweep completed ──────────────────────────────────────────────
+    socket.on('curfew:parent_notified', (data: { studentName?: string; message?: string }) => {
+      setLastCurfewEvent({ type: 'curfew:parent_notified', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+      toastManager.show(`📱 Parent Alert Dispatched: ${data.studentName || 'Student'}`, 'warning', 5000);
+    });
+
     socket.on('curfew:sweep_completed', (data: { summary?: any }) => {
       setLastCurfewEvent({ type: 'curfew:sweep_completed', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
       const summary = data.summary || {};
       toastManager.show(
         `🛡️ Curfew Sweep: ${summary.present || 0} Present, ${summary.outside || 0} in Grace Period`,
@@ -204,45 +258,104 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
       );
     });
 
-    // ── Curfew session ended ────────────────────────────────────────────────
-    socket.on('curfew:ended', (data: any) => {
-      setLastCurfewEvent({ type: 'curfew:ended', data, timestamp: Date.now() });
-      toastManager.show('🛑 Curfew session concluded by Warden.', 'info', 4000);
+    // ── Operational Events (Gate, Attendance, Leave, Discipline, Complaints) ────
+    socket.on('gate:event', (data: any) => {
+      setLastOperationalEvent({ type: 'gate:event', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
     });
 
-    // ── Emergency broadcast ─────────────────────────────────────────────────
-    socket.on('emergency:broadcast', (data: { title: string; message: string }) => {
-      toastManager.show(
-        `🚨 EMERGENCY — ${data.title}: ${data.message}`,
-        'error',
-        10000
-      );
+    socket.on('gate:checkin', (data: any) => {
+      setLastOperationalEvent({ type: 'gate:checkin', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
     });
 
-    // ── Leave status changes ────────────────────────────────────────────────
+    socket.on('gate:checkout', (data: any) => {
+      setLastOperationalEvent({ type: 'gate:checkout', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+    });
+
+    socket.on('attendance:update', (data: any) => {
+      setLastOperationalEvent({ type: 'attendance:update', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+    });
+
+    socket.on('occupancy:update', (data: any) => {
+      setLastOperationalEvent({ type: 'occupancy:update', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+    });
+
     socket.on('leave:status', (data: { status: string; permissionId: string }) => {
-      const statusLabel =
-        data.status === 'approved' ? '✅ Approved' : '❌ Rejected';
-      toastManager.show(
-        `Leave Request ${statusLabel}`,
-        data.status === 'approved' ? 'success' : 'error',
-        5000
-      );
+      setLastOperationalEvent({ type: 'leave:status', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+      const statusLabel = data.status === 'approved' ? '✅ Approved' : '❌ Rejected';
+      toastManager.show(`Leave Request ${statusLabel}`, data.status === 'approved' ? 'success' : 'error', 5000);
+    });
+
+    socket.on('permission:new', (data: any) => {
+      setLastOperationalEvent({ type: 'permission:new', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+      toastManager.show('📄 New Permission / Leave Request submitted', 'info', 4000);
+    });
+
+    socket.on('violation:created', (data: any) => {
+      setLastOperationalEvent({ type: 'violation:created', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+    });
+
+    socket.on('violation:resolved', (data: any) => {
+      setLastOperationalEvent({ type: 'violation:resolved', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+    });
+
+    socket.on('violation:escalated', (data: any) => {
+      setLastOperationalEvent({ type: 'violation:escalated', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+    });
+
+    socket.on('complaint:new', (data: any) => {
+      setLastOperationalEvent({ type: 'complaint:new', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+      toastManager.show('⚠️ New Student Complaint logged', 'warning', 4000);
+    });
+
+    socket.on('complaint:updated', (data: any) => {
+      setLastOperationalEvent({ type: 'complaint:updated', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+    });
+
+    socket.on('notification', (data: any) => {
+      setLastOperationalEvent({ type: 'notification', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+    });
+
+    socket.on('emergency:broadcast', (data: { title: string; message: string }) => {
+      setLastOperationalEvent({ type: 'emergency:broadcast', data, timestamp: Date.now() });
+      setRefreshKey((k) => k + 1);
+      toastManager.show(`🚨 EMERGENCY — ${data.title}: ${data.message}`, 'error', 10000);
+    });
+
+    socket.on('dashboard:refresh', () => {
+      setRefreshKey((k) => k + 1);
     });
 
     return () => {
       socket.disconnect();
       socketRef.current = null;
+      setSocketInstance(null);
     };
   }, []);
 
   return (
     <AlertSocketContext.Provider
       value={{
+        socket: socketInstance,
         connected,
         unreadCount,
         latestAlert,
         lastCurfewEvent,
+        lastOperationalEvent,
+        refreshKey,
+        triggerRefresh,
         incrementUnread,
         decrementUnread,
         setUnreadCount,
