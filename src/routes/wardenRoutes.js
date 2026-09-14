@@ -84,6 +84,7 @@ router.get('/students', getHostelStudents);
 router.get('/students/list', getStudentsList);
 router.get('/students/with-attendance', getStudentsWithAttendance);
 router.get('/students/:id', validateObjectId('id'), getStudentDetails);
+router.post('/students/:studentId/reset-device', validateObjectId('studentId'), require('../controllers/wardenController').resetStudentDevice);
 
 // Room & Bed Management
 router.get('/rooms', getWardenRooms);

@@ -171,6 +171,15 @@ const userSchema = new mongoose.Schema({
   welcomeEmailSentAt: {
     type: Date,
   },
+  deviceId: {
+    type: String,
+    default: null,
+    index: true,
+  },
+  deviceBoundAt: {
+    type: Date,
+    default: null,
+  },
 });
 
 userSchema.index({ hostelId: 1, role: 1, status: 1 });

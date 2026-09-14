@@ -94,7 +94,7 @@ exports.register = asyncHandler(async (req, res) => {
 // @route   POST /api/auth/login
 // @access  Public
 exports.login = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, deviceId } = req.body;
 
   if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
     return res.status(400).json({ success: false, message: 'Please provide valid email and password' });
@@ -110,6 +110,31 @@ exports.login = asyncHandler(async (req, res) => {
   const isPasswordValid = await user.matchPassword(password);
   if (!isPasswordValid) {
     return res.status(401).json({ success: false, message: 'Invalid credentials' });
+  }
+
+  // Read role from raw document (Mongoose may hide it when stored as array or invalid type)
+  const raw = user.toObject ? user.toObject() : user;
+  let role = normalizeRole(raw.role);
+  // If still missing, get from DB with lean() to avoid schema casting
+  if (role == null) {
+    const doc = await User.findById(user._id).select('role').lean();
+    role = normalizeRole(doc?.role);
+  }
+
+  // Strict Device Binding Logic (Phase 1)
+  if (role === 'student' && deviceId) {
+    if (!user.deviceId) {
+      // First time login from mobile app, bind device
+      await User.findByIdAndUpdate(user._id, { 
+        $set: { deviceId, deviceBoundAt: new Date() } 
+      });
+    } else if (user.deviceId !== deviceId) {
+      // Mismatch
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Device bound to another phone. Please login from your registered device or request a device reset from the Warden.' 
+      });
+    }
   }
 
   // Update lastLogin without re-validating the whole document (avoids error when role is stored as array)
