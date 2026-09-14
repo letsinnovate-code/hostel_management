@@ -21,7 +21,8 @@
     "paths": {
       "@/*": ["./*"],
       "@hostelzify/api-client": ["../packages/api-client/src"],
-      "@hostelzify/api-client/*": ["../packages/api-client/src/*"]
+      "@hostelzify/api-client/*": ["../packages/api-client/src/*"],
+      "axios": ["./node_modules/axios"]
     }
   },
   "include": [
