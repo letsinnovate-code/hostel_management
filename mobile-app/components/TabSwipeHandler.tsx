@@ -4,56 +4,50 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
 import { useRouter, usePathname } from 'expo-router';
 
-const TAB_ROUTES = [
-  '/(student)/dashboard',
-  '/(student)/map',
-  '/(student)/mess',
-  '/(student)/services',
-  '/(student)/more',
-] as const;
-
 const SWIPE_THRESHOLD = 50;
 const EDGE_WIDTH = 28;
+
+const MAIN_TABS = ['dashboard', 'map', 'mess', 'services', 'more'];
 
 export default function TabSwipeHandler() {
   const router = useRouter();
   const pathname = usePathname();
 
   const screen = pathname?.split('/').filter(Boolean).pop() ?? '';
-  const currentIndex = TAB_ROUTES.findIndex((r) => pathname === r || r.endsWith('/' + screen));
-  const index = currentIndex < 0 ? 0 : currentIndex;
+  const isMainTab = MAIN_TABS.includes(screen);
 
-  const goPrev = useCallback(() => {
-    if (index <= 0) return;
-    router.replace(TAB_ROUTES[index - 1]);
-  }, [index, router]);
+  const goBack = useCallback(() => {
+    if (isMainTab) return;
 
-  const goNext = useCallback(() => {
-    if (index >= TAB_ROUTES.length - 1) return;
-    router.replace(TAB_ROUTES[index + 1]);
-  }, [index, router]);
+    if (['leave', 'maintenance', 'fees'].includes(screen)) {
+      if (router.canGoBack()) router.back();
+      else router.navigate('/(student)/services');
+    } else if (['permissions', 'visitors', 'violations', 'complaints', 'profile', 'support'].includes(screen)) {
+      if (router.canGoBack()) router.back();
+      else router.navigate('/(student)/more');
+    } else if (screen === 'mess-feedback') {
+      if (router.canGoBack()) router.back();
+      else router.navigate('/(student)/mess');
+    }
+  }, [isMainTab, screen, router]);
 
   const leftEdgePan = Gesture.Pan()
     .activeOffsetX(10)
     .failOffsetY([-18, 18])
     .onEnd((e) => {
-      if (e.translationX > SWIPE_THRESHOLD || e.velocityX > 250) runOnJS(goPrev)();
+      if (e.translationX > SWIPE_THRESHOLD || e.velocityX > 250) {
+        runOnJS(goBack)();
+      }
     });
 
-  const rightEdgePan = Gesture.Pan()
-    .activeOffsetX(-10)
-    .failOffsetY([-18, 18])
-    .onEnd((e) => {
-      if (e.translationX < -SWIPE_THRESHOLD || e.velocityX < -250) runOnJS(goNext)();
-    });
+  // Do not intercept edge gestures on main tabs (dashboard, map, mess, services, more)
+  // to avoid interfering with native device gestures and preventing unwanted dashboard redirects.
+  if (isMainTab) return null;
 
   return (
     <View style={styles.container} pointerEvents="box-none">
       <GestureDetector gesture={leftEdgePan}>
         <View style={styles.edgeLeft} />
-      </GestureDetector>
-      <GestureDetector gesture={rightEdgePan}>
-        <View style={styles.edgeRight} />
       </GestureDetector>
     </View>
   );
@@ -67,13 +61,6 @@ const styles = StyleSheet.create({
   edgeLeft: {
     position: 'absolute',
     left: 0,
-    top: 0,
-    bottom: 0,
-    width: EDGE_WIDTH,
-  },
-  edgeRight: {
-    position: 'absolute',
-    right: 0,
     top: 0,
     bottom: 0,
     width: EDGE_WIDTH,

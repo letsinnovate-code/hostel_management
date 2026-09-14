@@ -12,7 +12,11 @@ export default function NotificationsRedirect() {
 
   useEffect(() => {
     show();
-    router.replace('/(student)/dashboard');
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(student)/dashboard');
+    }
   }, [show, router]);
 
   return null;

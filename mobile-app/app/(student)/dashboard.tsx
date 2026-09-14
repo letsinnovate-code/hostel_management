@@ -12,6 +12,9 @@ import {
   AppState,
   AppStateStatus,
   Linking,
+  Modal,
+  ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -112,6 +115,11 @@ export default function StudentDashboard() {
   });
   const [notifications, setNotifications] = useState<any[]>([]);
   const [permissions, setPermissions] = useState<any[]>([]);
+  const [violations, setViolations] = useState<any[]>([]);
+  const [complaints, setComplaints] = useState<any[]>([]);
+  const [pendingPaymentsList, setPendingPaymentsList] = useState<any[]>([]);
+  const [activeModal, setActiveModal] = useState<'permissions' | 'violations' | 'complaints' | 'payments' | null>(null);
+  const [payingFor, setPayingFor] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
   const { width: winWidth } = useWindowDimensions();
 
@@ -333,7 +341,7 @@ export default function StudentDashboard() {
       setLoading(false);
       setRefreshing(false);
 
-      // Phase 2: notifications, permissions, payments, location – update UI as they arrive
+      // Phase 2: notifications, permissions, payments, violations, complaints, location – update UI as they arrive
       const applyNotifications = (res: any) => {
         const notifData = res?.data ?? res;
         const notifList = Array.isArray(notifData) ? notifData : [];
@@ -344,23 +352,39 @@ export default function StudentDashboard() {
       const applyPermissions = (res: any) => {
         const permData = res?.data ?? res;
         const permList = Array.isArray(permData) ? permData : [];
-        setPermissions(permList.slice(0, 5));
+        setPermissions(permList);
         setStats((prev) => ({ ...prev, permissions: permList.filter((p: any) => p.status === 'pending').length || 0 }));
       };
       const applyPayments = (res: any) => {
         const paymentsList = Array.isArray(res) ? res : [];
-        const pendingPaymentsList = paymentsList.filter((p: any) => p.status === 'pending');
-        const pendingAmount = pendingPaymentsList.reduce((s: number, p: any) => s + (Number(p.amount) || 0), 0);
+        const pending = paymentsList.filter((p: any) => p.status === 'pending');
+        const pendingAmount = pending.reduce((s: number, p: any) => s + (Number(p.amount) || 0), 0);
+        setPendingPaymentsList(pending);
         setStats((prev) => ({
           ...prev,
-          pendingPayments: pendingPaymentsList.length,
+          pendingPayments: pending.length,
           pendingPaymentsAmount: pendingAmount,
         }));
+      };
+      const applyViolations = (res: any) => {
+        const vData = res?.data ?? res;
+        const vList = Array.isArray(vData) ? vData : [];
+        setViolations(vList);
+        setStats((prev) => ({ ...prev, violations: vList.length }));
+      };
+      const applyComplaints = (res: any) => {
+        const cData = res?.data ?? res;
+        const cList = Array.isArray(cData) ? cData : [];
+        const active = cList.filter((c: any) => c.status === 'open' || c.status === 'in-progress');
+        setComplaints(cList);
+        setStats((prev) => ({ ...prev, complaints: active.length }));
       };
 
       api.getNotifications().then(applyNotifications).catch(() => applyNotifications({ data: [] }));
       api.getPermissionRequests().then(applyPermissions).catch(() => applyPermissions({ data: [] }));
       api.getMyPayments().then(applyPayments).catch(() => applyPayments([]));
+      api.getViolationHistory().then(applyViolations).catch(() => applyViolations({ data: [] }));
+      api.getComplaints().then(applyComplaints).catch(() => applyComplaints({ data: [] }));
 
       Location.getForegroundPermissionsAsync()
         .then(({ status: perm }) =>
@@ -551,6 +575,13 @@ export default function StudentDashboard() {
                 activeComplaints={stats.complaints}
                 pendingPayments={stats.pendingPayments}
                 pendingPaymentsAmount={stats.pendingPaymentsAmount}
+                onCardPress={(key) => {
+                  if (key === 'unreadNotifications') { showNotificationsOverlay(); return; }
+                  if (key === 'pendingPermissions') setActiveModal('permissions');
+                  else if (key === 'violations') setActiveModal('violations');
+                  else if (key === 'activeComplaints') setActiveModal('complaints');
+                  else if (key === 'pendingPayments') setActiveModal('payments');
+                }}
               />
             </View>
 
@@ -587,6 +618,205 @@ export default function StudentDashboard() {
           </>
         )}
       </ScrollView>
+
+      {/* Detail Modal for Overview Cards */}
+      <Modal
+        visible={activeModal !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setActiveModal(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {activeModal === 'permissions' && 'Pending Permissions'}
+                {activeModal === 'violations' && 'Violations'}
+                {activeModal === 'complaints' && 'Complaints'}
+                {activeModal === 'payments' && 'Pending Payments'}
+              </Text>
+              <TouchableOpacity onPress={() => setActiveModal(null)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+                <Ionicons name="close" size={24} color="#374151" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+              {/* Permissions */}
+              {activeModal === 'permissions' && (
+                permissions.filter((p: any) => p.status === 'pending').length === 0
+                  ? <Text style={styles.modalEmpty}>No pending permissions</Text>
+                  : permissions.filter((p: any) => p.status === 'pending').map((p: any) => (
+                    <View key={p._id} style={styles.modalCard}>
+                      <View style={styles.modalCardRow}>
+                        <View style={[styles.modalDot, { backgroundColor: '#2563eb' }]} />
+                        <Text style={styles.modalCardTitle}>
+                          {(p.permissionType || 'permission').replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                        </Text>
+                        <View style={[styles.modalBadge, { backgroundColor: '#fef3c7' }]}>
+                          <Text style={[styles.modalBadgeText, { color: '#b45309' }]}>Pending</Text>
+                        </View>
+                      </View>
+                      {p.reason ? <Text style={styles.modalCardDesc}>{p.reason}</Text> : null}
+                      <Text style={styles.modalCardDate}>
+                        {p.requestedDate ? new Date(p.requestedDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+                        {p.returnDate ? ` → ${new Date(p.returnDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}
+                      </Text>
+                    </View>
+                  ))
+              )}
+
+              {/* Violations */}
+              {activeModal === 'violations' && (
+                violations.length === 0
+                  ? <Text style={styles.modalEmpty}>No violations on record 🎉</Text>
+                  : violations.map((v: any) => {
+                    const sevColor = v.severity === 'high' ? '#dc2626' : v.severity === 'medium' ? '#f59e0b' : '#3b82f6';
+                    return (
+                      <View key={v._id} style={[styles.modalCard, { borderLeftWidth: 3, borderLeftColor: sevColor }]}>
+                        <View style={styles.modalCardRow}>
+                          <Ionicons name="warning" size={18} color={sevColor} />
+                          <Text style={styles.modalCardTitle}>
+                            {(v.violationType || v.type || 'Violation').replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                          </Text>
+                          {v.severity && (
+                            <View style={[styles.modalBadge, { backgroundColor: `${sevColor}18` }]}>
+                              <Text style={[styles.modalBadgeText, { color: sevColor }]}>{v.severity?.toUpperCase()}</Text>
+                            </View>
+                          )}
+                        </View>
+                        {v.description ? <Text style={styles.modalCardDesc}>{v.description}</Text> : null}
+                        <Text style={styles.modalCardDate}>
+                          {v.createdAt ? new Date(v.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+                          {v.status ? ` · ${v.status}` : ''}
+                        </Text>
+                      </View>
+                    );
+                  })
+              )}
+
+              {/* Complaints */}
+              {activeModal === 'complaints' && (
+                complaints.length === 0
+                  ? <Text style={styles.modalEmpty}>No complaints</Text>
+                  : complaints.map((c: any) => {
+                    const statusColor = c.status === 'resolved' || c.status === 'closed' ? '#059669'
+                      : c.status === 'in-progress' ? '#2563eb' : '#f59e0b';
+                    return (
+                      <View key={c._id} style={styles.modalCard}>
+                        <View style={styles.modalCardRow}>
+                          <Ionicons name="document-text" size={18} color={statusColor} />
+                          <Text style={[styles.modalCardTitle, { flex: 1 }]} numberOfLines={1}>{c.title}</Text>
+                          <View style={[styles.modalBadge, { backgroundColor: `${statusColor}18` }]}>
+                            <Text style={[styles.modalBadgeText, { color: statusColor }]}>
+                              {(c.status || 'open').toUpperCase()}
+                            </Text>
+                          </View>
+                        </View>
+                        {c.complaintType ? (
+                          <Text style={styles.modalCardType}>{c.complaintType.toUpperCase()}</Text>
+                        ) : null}
+                        {c.description ? <Text style={styles.modalCardDesc} numberOfLines={3}>{c.description}</Text> : null}
+                        <Text style={styles.modalCardDate}>
+                          {c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+                        </Text>
+                      </View>
+                    );
+                  })
+              )}
+
+              {/* Pending Payments */}
+              {activeModal === 'payments' && (
+                pendingPaymentsList.length === 0
+                  ? <Text style={styles.modalEmpty}>No pending payments</Text>
+                  : pendingPaymentsList.map((p: any) => (
+                    <View key={p._id} style={[styles.modalCard, { borderLeftWidth: 3, borderLeftColor: '#b45309' }]}>
+                      <View style={styles.modalCardRow}>
+                        <Ionicons name="card" size={18} color="#b45309" />
+                        <Text style={styles.modalCardTitle}>₹{Number(p.amount).toLocaleString()} · {p.type || 'Fee'}</Text>
+                      </View>
+                      {(p.planId?.name || p.planId?.durationMonths) ? (
+                        <Text style={styles.modalCardDesc}>
+                          Plan: {p.planId.name ?? `${p.planId.durationMonths} month${p.planId.durationMonths !== 1 ? 's' : ''}`}
+                        </Text>
+                      ) : null}
+                      {p.periodStart && p.periodEnd ? (
+                        <Text style={styles.modalCardDate}>
+                          Period: {new Date(p.periodStart).toLocaleDateString()} – {new Date(p.periodEnd).toLocaleDateString()}
+                        </Text>
+                      ) : null}
+                      {p.dueDate && (
+                        <Text style={[styles.modalCardDate, { color: '#b45309' }]}>Due: {new Date(p.dueDate).toLocaleDateString()}</Text>
+                      )}
+                      <TouchableOpacity
+                        style={styles.payButton}
+                        activeOpacity={0.8}
+                        disabled={!!payingFor}
+                        onPress={async () => {
+                          setPayingFor(p._id);
+                          try {
+                            const res = await api.createRazorpayOrderForPayment(p._id);
+                            const data = (res as any)?.data ?? res;
+                            if (data?.orderId && data?.keyId) {
+                              // Close modal and navigate to fees page for full payment flow
+                              setActiveModal(null);
+                              router.push('/(student)/fees');
+                            } else {
+                              Alert.alert('Pay at office', `Razorpay not configured. Pay ₹${Number(p.amount).toLocaleString()} at the hostel office.`);
+                            }
+                          } catch (e: any) {
+                            if (e?.response?.status === 503 || e.message?.includes('not configured')) {
+                              Alert.alert('Pay at office', `Pay ₹${Number(p.amount).toLocaleString()} at the hostel office.`);
+                            } else {
+                              Alert.alert('Error', e.message || 'Failed to start payment');
+                            }
+                          } finally {
+                            setPayingFor(null);
+                          }
+                        }}
+                      >
+                        {payingFor === p._id ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <>
+                            <Ionicons name="card" size={16} color="#fff" style={{ marginRight: 6 }} />
+                            <Text style={styles.payButtonText}>Pay ₹{Number(p.amount).toLocaleString()}</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  ))
+              )}
+              <View style={{ height: 24 }} />
+            </ScrollView>
+
+            {/* View All button for permissions, violations, complaints */}
+            {activeModal === 'permissions' && (
+              <TouchableOpacity style={styles.modalViewAll} onPress={() => { setActiveModal(null); router.push('/(student)/permissions'); }}>
+                <Text style={styles.modalViewAllText}>View All Permissions</Text>
+                <Ionicons name="chevron-forward" size={18} color="#2563eb" />
+              </TouchableOpacity>
+            )}
+            {activeModal === 'violations' && (
+              <TouchableOpacity style={styles.modalViewAll} onPress={() => { setActiveModal(null); router.push('/(student)/violations'); }}>
+                <Text style={styles.modalViewAllText}>View All Violations</Text>
+                <Ionicons name="chevron-forward" size={18} color="#2563eb" />
+              </TouchableOpacity>
+            )}
+            {activeModal === 'complaints' && (
+              <TouchableOpacity style={styles.modalViewAll} onPress={() => { setActiveModal(null); router.push('/(student)/complaints'); }}>
+                <Text style={styles.modalViewAllText}>View All Complaints</Text>
+                <Ionicons name="chevron-forward" size={18} color="#2563eb" />
+              </TouchableOpacity>
+            )}
+            {activeModal === 'payments' && (
+              <TouchableOpacity style={styles.modalViewAll} onPress={() => { setActiveModal(null); router.push('/(student)/fees'); }}>
+                <Text style={styles.modalViewAllText}>View All Payments</Text>
+                <Ionicons name="chevron-forward" size={18} color="#2563eb" />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </Modal>
 
     </View>
   );
@@ -735,6 +965,124 @@ const styles = StyleSheet.create({
   paymentsCardSubtitle: {
     fontSize: 12,
     color: '#b45309',
+    marginTop: 2,
+  },
+  // Detail Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '80%',
+    paddingBottom: Platform.OS === 'ios' ? 28 : 16,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  modalScroll: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+  },
+  modalEmpty: {
+    textAlign: 'center',
+    color: '#94a3b8',
+    fontSize: 14,
+    marginTop: 32,
+    marginBottom: 32,
+  },
+  modalCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  modalCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  modalDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  modalCardTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  modalBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginLeft: 'auto',
+  },
+  modalBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  modalCardType: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  modalCardDesc: {
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 18,
+    marginBottom: 4,
+  },
+  modalCardDate: {
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  payButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0c2458',
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  payButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  modalViewAll: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    gap: 4,
+  },
+  modalViewAllText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2563eb',
     marginTop: 2,
   },
 });

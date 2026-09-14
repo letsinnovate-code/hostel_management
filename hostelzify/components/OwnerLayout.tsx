@@ -33,9 +33,8 @@ export default function OwnerLayout({ children }: OwnerLayoutProps) {
   useEffect(() => {
     // Only set initial state, don't override user actions
     if (window.innerWidth >= 1024) {
-      setSidebarOpen(true);
-    } else {
-      setSidebarOpen(false);
+      const timer = setTimeout(() => setSidebarOpen(true), 0);
+      return () => clearTimeout(timer);
     }
   }, []);
 

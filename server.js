@@ -5,9 +5,9 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const mongoose = require('mongoose');
-const connectDB = require('./config/database');
+const connectDB = require('./src/config/database');
 // Alert & Automation Module
-const { initAlertModule, shutdownAlertModule } = require('./modules/alert');
+const { initAlertModule, shutdownAlertModule } = require('./src/modules/alert');
 
 // Load env vars
 dotenv.config();
@@ -24,8 +24,8 @@ if (missingEnv.length > 0) {
   }
 }
 
-// Connect to database (for standalone server; serverless connects via middleware)
-if (!process.env.VERCEL) {
+// Connect to database (for standalone server; serverless connects via middleware; skipped in test)
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
   connectDB();
 }
 
@@ -73,7 +73,9 @@ const isOriginAllowed = (origin) => {
   try {
     const hostname = new URL(origin).hostname;
     if (hostname.endsWith('.vercel.app')) return true;
-  } catch (_) {}
+  } catch (parseErr) {
+    // Malformed origin header URL cannot match vercel.app; intentionally ignored
+  }
   return false;
 };
 
@@ -121,7 +123,7 @@ app.use(async (req, res, next) => {
   }
 
   try {
-    if (mongoose.connection.readyState !== 1) {
+    if (mongoose.connection.readyState !== 1 && process.env.NODE_ENV !== 'test') {
       await connectDB();
     }
     next();
@@ -136,18 +138,18 @@ app.use(async (req, res, next) => {
 });
 
 // Routes
-app.use('/api/auth', require('./routes/authRoutes'));
-app.use('/api/public', require('./routes/publicRoutes'));
-app.use('/api/owner', require('./routes/ownerRoutes'));
-app.use('/api/warden', require('./routes/wardenRoutes'));
-app.use('/api/cleaner', require('./routes/cleanerRoutes'));
-app.use('/api/student', require('./routes/studentRoutes'));
-app.use('/api/security', require('./routes/securityRoutes'));
-app.use('/api/superadmin', require('./routes/superadminRoutes'));
+app.use('/api/auth', require('./src/routes/authRoutes'));
+app.use('/api/public', require('./src/routes/publicRoutes'));
+app.use('/api/owner', require('./src/routes/ownerRoutes'));
+app.use('/api/warden', require('./src/routes/wardenRoutes'));
+app.use('/api/cleaner', require('./src/routes/cleanerRoutes'));
+app.use('/api/student', require('./src/routes/studentRoutes'));
+app.use('/api/security', require('./src/routes/securityRoutes'));
+app.use('/api/superadmin', require('./src/routes/superadminRoutes'));
 // Hostel Alert & Automation Module routes
-app.use('/api/alerts', require('./modules/alert/routes/alertRoutes'));
+app.use('/api/alerts', require('./src/modules/alert/routes/alertRoutes'));
 // Student Onboarding & Verification Module routes
-app.use('/api/onboarding', require('./routes/onboardingRoutes'));
+app.use('/api/onboarding', require('./src/routes/onboardingRoutes'));
 
 // Production-grade Health Check (readiness & liveness)
 app.get('/api/health', (req, res) => {
@@ -171,142 +173,8 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Razorpay checkout page (for mobile WebView – uses callback_url + redirect for WebView compatibility)
-app.get('/api/razorpay-checkout', (req, res) => {
-  const orderId = (req.query.order_id || '').toString().trim();
-  const keyId = (req.query.key_id || '').toString().trim();
-  const amountINR = Number(req.query.amount) || 0;
-  const name = (req.query.name || 'Hostel Payment').toString().replace(/[<>"']/g, '');
-  const description = (req.query.description || 'Payment').toString().replace(/[<>"']/g, '');
-  const callbackUrl = (req.query.callback_url || '').toString().trim();
-  if (!orderId || !keyId || amountINR < 1) {
-    res.status(400).send('<html><body><p>Missing or invalid parameters (order_id, key_id, amount required).</p></body></html>');
-    return;
-  }
-  if (!callbackUrl) {
-    res.status(400).send('<html><body><p>Missing callback_url (required for WebView).</p></body></html>');
-    return;
-  }
-  const amountPaise = Math.round(amountINR * 100);
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-</head>
-<body>
-  <p id="msg">Opening payment...</p>
-  <button id="btn" style="display:none; padding:12px 24px; font-size:16px; background:#0c2458; color:#fff; border:none; border-radius:8px; cursor:pointer;">Pay ₹${amountINR.toLocaleString()}</button>
-  <script>
-    (function() {
-      var orderId = ${JSON.stringify(orderId)};
-      var keyId = ${JSON.stringify(keyId)};
-      var amountPaise = ${amountPaise};
-      var name = ${JSON.stringify(name)};
-      var description = ${JSON.stringify(description)};
-      var callbackUrl = ${JSON.stringify(callbackUrl)};
-      var options = {
-        key: keyId,
-        amount: amountPaise,
-        currency: 'INR',
-        order_id: orderId,
-        name: name,
-        description: description,
-        callback_url: callbackUrl,
-        redirect: true
-      };
-      function openCheckout() {
-        try {
-          var rzp = new Razorpay(options);
-          rzp.open();
-        } catch (e) {
-          document.getElementById('msg').textContent = 'Error: ' + (e.message || 'Could not open payment');
-          document.getElementById('btn').style.display = 'block';
-          document.getElementById('btn').onclick = function() { openCheckout(); };
-        }
-      }
-      if (window.Razorpay) {
-        openCheckout();
-      } else {
-        document.getElementById('msg').textContent = 'Loading Razorpay...';
-        document.getElementById('btn').style.display = 'block';
-        document.getElementById('btn').onclick = function() {
-          if (window.Razorpay) openCheckout();
-          else document.getElementById('msg').textContent = 'Failed to load. Use "Pay in browser" from the app.';
-        };
-        setTimeout(function() { if (window.Razorpay) openCheckout(); }, 1500);
-      }
-    })();
-  </script>
-</body>
-</html>`;
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(html);
-});
-
-// Razorpay callback (POST from Razorpay redirect – used when redirect:true in checkout)
-const Payment = require('./models/Payment');
-const Plan = require('./models/Plan');
-const { verifyPaymentSignature } = require('./utils/razorpay');
-const { setPeriodFromPlan } = require('./utils/paymentPeriod');
-app.post('/api/razorpay-callback', (req, res) => {
-  const razorpay_order_id = (req.body && req.body.razorpay_order_id) || (req.query && req.query.razorpay_order_id);
-  const razorpay_payment_id = (req.body && req.body.razorpay_payment_id) || (req.query && req.query.razorpay_payment_id);
-  const razorpay_signature = (req.body && req.body.razorpay_signature) || (req.query && req.query.razorpay_signature);
-  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-    return res.status(400).set('Content-Type', 'text/html').send(
-      '<!DOCTYPE html><html><body><p>Missing payment details.</p></body></html>'
-    );
-  }
-  const valid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
-  if (!valid) {
-    return res.status(400).set('Content-Type', 'text/html').send(
-      '<!DOCTYPE html><html><body><p>Invalid signature.</p></body></html>'
-    );
-  }
-  Payment.findOne({ razorpayOrderId: razorpay_order_id })
-    .then(async (payment) => {
-      if (!payment) {
-        return res.status(404).set('Content-Type', 'text/html').send(
-          '<!DOCTYPE html><html><body><p>Payment not found.</p></body></html>'
-        );
-      }
-      if (payment.status === 'paid') {
-        return sendSuccessHtml(res);
-      }
-      payment.status = 'paid';
-      payment.transactionId = razorpay_payment_id;
-      payment.paymentMethod = 'upi';
-      payment.paidDate = new Date();
-      if (payment.planId) {
-        const plan = await Plan.findById(payment.planId).select('durationMonths').lean();
-        if (plan && plan.durationMonths) setPeriodFromPlan(payment, payment.paidDate, plan.durationMonths);
-      }
-      return payment.save().then(() => sendSuccessHtml(res));
-    })
-    .catch((err) => {
-      console.error('Razorpay callback error:', err);
-      res.status(500).set('Content-Type', 'text/html').send(
-        '<!DOCTYPE html><html><body><p>Server error.</p></body></html>'
-      );
-    });
-});
-
-function sendSuccessHtml(res) {
-  const html = `<!DOCTYPE html>
-<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="font-family:sans-serif; padding:24px; text-align:center;">
-  <h2 style="color:#059669;">Payment successful</h2>
-  <p>You can close this window and return to the app.</p>
-  <script>
-    if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({ success: true }));
-    }
-  </script>
-</body></html>`;
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(html);
-}
+// Payment & Razorpay routes (moved to dedicated payment module)
+app.use('/api', require('./src/routes/paymentRoutes'));
 
 // Root route
 app.get('/', (req, res) => {
@@ -415,8 +283,8 @@ const PORT = process.env.PORT || 4000;
 // Create shared HTTP server (required for Socket.IO to work on same port as Express)
 const server = http.createServer(app);
 
-// Only start HTTP server when not on Vercel (serverless handles requests via export)
-if (!process.env.VERCEL) {
+// Only start HTTP server when not on Vercel and not in test environment
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
   server.listen(PORT, '0.0.0.0', async () => {
     console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
     console.log(`Accessible at:`);

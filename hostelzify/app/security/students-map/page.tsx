@@ -51,17 +51,18 @@ const STATUS_LABEL: Record<string, string> = {
   not_checked: 'Not Checked',
 };
 
+import { useGoogleMapsScript } from '../../../hooks/useGoogleMapsScript';
+import { useMarkerManager } from '../../../hooks/useMarkerManager';
+
 export default function SecurityStudentsMapPage() {
   const { user } = useAuth();
   const router = useRouter();
   const mapRef = useRef<HTMLDivElement>(null);
   const [students, setStudents] = useState<StudentItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [mapReady, setMapReady] = useState(false);
+  const { isLoaded: mapReady } = useGoogleMapsScript('places,geometry');
   const [mapInstance, setMapInstance] = useState<any>(null);
   const [filter, setFilter] = useState<'all' | 'checked-in' | 'checked-out' | 'not-checked'>('all');
-  const markersRef = useRef<any[]>([]);
-  const infoWindowsRef = useRef<any[]>([]);
 
   useEffect(() => {
     if (!user || user.role !== 'security') {
@@ -70,21 +71,6 @@ export default function SecurityStudentsMapPage() {
     }
     loadData();
   }, [user, router]);
-
-  // Load Google Maps script
-  useEffect(() => {
-    if (typeof window !== 'undefined' && !window.google) {
-      const script = document.createElement('script');
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry`;
-      script.async = true;
-      script.defer = true;
-      script.onload = () => setMapReady(true);
-      document.head.appendChild(script);
-    } else if (typeof window !== 'undefined' && window.google) {
-      setMapReady(true);
-    }
-  }, []);
 
   const loadData = async () => {
     setLoading(true);
@@ -113,16 +99,11 @@ export default function SecurityStudentsMapPage() {
     setMapInstance(map);
   }, [mapReady, mapRef.current]);
 
-  // Plot markers based on current filter
+  const { syncMarkers } = useMarkerManager(mapInstance);
+
+  // Plot markers differentially based on current filter
   useEffect(() => {
     if (!mapInstance || !window.google) return;
-    const google = window.google;
-
-    // Clear old markers
-    markersRef.current.forEach((m) => m.setMap(null));
-    infoWindowsRef.current.forEach((iw) => iw.close());
-    markersRef.current = [];
-    infoWindowsRef.current = [];
 
     const filtered = students.filter((item) => {
       if (filter === 'all') return true;
@@ -139,38 +120,14 @@ export default function SecurityStudentsMapPage() {
         typeof item.student.currentLocation.longitude === 'number'
     );
 
-    if (withLocation.length === 0) return;
-
-    const bounds = new google.maps.LatLngBounds();
-
-    withLocation.forEach((item) => {
-      const pos = {
-        lat: item.student.currentLocation!.latitude,
-        lng: item.student.currentLocation!.longitude,
-      };
-      bounds.extend(pos);
-
+    const markerData = withLocation.map((item, index) => {
       const color = STATUS_COLOR[item.status] || STATUS_COLOR.not_checked;
-      const marker = new google.maps.Marker({
-        position: pos,
-        map: mapInstance,
-        title: item.student.name,
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 10,
-          fillColor: color,
-          fillOpacity: 1,
-          strokeColor: '#ffffff',
-          strokeWeight: 2,
-        },
-      });
-      markersRef.current.push(marker);
-
       const lastUpdate = item.student.lastLocationUpdate
         ? new Date(item.student.lastLocationUpdate).toLocaleString()
         : '—';
-
       const statusLabel = STATUS_LABEL[item.status] || 'Unknown';
+      const studentId = item.student._id || item.student.studentId || `student-${index}`;
+
       const content = `
         <div style="padding: 8px; min-width: 180px; font-family: system-ui, sans-serif;">
           <p style="margin: 0 0 4px 0; font-weight: 600; color: #111;">${escapeHtml(item.student.name)}</p>
@@ -182,17 +139,19 @@ export default function SecurityStudentsMapPage() {
         </div>
       `;
 
-      const infoWindow = new google.maps.InfoWindow({ content });
-      infoWindowsRef.current.push(infoWindow);
-
-      marker.addListener('click', () => {
-        infoWindowsRef.current.forEach((iw) => iw.close());
-        infoWindow.open(mapInstance, marker);
-      });
+      return {
+        id: studentId,
+        latitude: item.student.currentLocation!.latitude,
+        longitude: item.student.currentLocation!.longitude,
+        title: item.student.name,
+        color: color,
+        strokeColor: '#ffffff',
+        contentHtml: content,
+      };
     });
 
-    mapInstance.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
-  }, [mapInstance, students, filter]);
+    syncMarkers(markerData, { fitBounds: true });
+  }, [mapInstance, students, filter, syncMarkers]);
 
   const filteredStudents = students.filter((item) => {
     if (filter === 'all') return true;

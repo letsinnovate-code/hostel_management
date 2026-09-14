@@ -225,7 +225,9 @@ export default function Sidebar({ visible, onClose }: SidebarProps) {
               </View>
               <View>
                 <Text style={styles.userName}>{user?.name || 'Owner'}</Text>
-                <Text style={styles.userRole}>{user?.role?.toUpperCase()}</Text>
+                <Text style={styles.userRole}>
+                  {String(Array.isArray(user?.role) ? user.role[0] : user?.role || '').toUpperCase()}
+                </Text>
               </View>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.closeButton}>

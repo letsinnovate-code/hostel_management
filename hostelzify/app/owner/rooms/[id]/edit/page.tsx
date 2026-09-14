@@ -67,7 +67,7 @@ export default function EditRoomPage() {
         // Handle blockId - it can be a string or an object (for backward compatibility)
         const blockIdValue = typeof room.blockId === 'string'
           ? room.blockId
-          : room.blockId?._id || room.blockId?.name || room.blockId || '';
+          : (room.blockId?._id || room.blockId?.name || '');
 
         // Set hostel from room, or default to first hostel
         const roomHostelId = room.hostelId

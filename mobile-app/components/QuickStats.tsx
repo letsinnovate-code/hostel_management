@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 interface StatsProps {
@@ -9,6 +9,7 @@ interface StatsProps {
   activeComplaints: number;
   pendingPayments?: number;
   pendingPaymentsAmount?: number;
+  onCardPress?: (key: string) => void;
 }
 
 const STATS = [
@@ -55,6 +56,7 @@ export default function QuickStats({
   violations,
   activeComplaints,
   pendingPayments = 0,
+  onCardPress,
 }: StatsProps) {
   const values = {
     pendingPermissions,
@@ -70,7 +72,12 @@ export default function QuickStats({
         {STATS.map((stat, index) => {
           const value = values[stat.valueKey];
           return (
-            <View key={index} style={styles.card}>
+            <TouchableOpacity
+              key={index}
+              style={styles.card}
+              activeOpacity={0.7}
+              onPress={() => onCardPress?.(stat.valueKey)}
+            >
               <View style={[styles.iconCircle, { backgroundColor: stat.bg }]}>
                 <Ionicons name={stat.icon} size={22} color={stat.color} />
               </View>
@@ -80,7 +87,8 @@ export default function QuickStats({
                 </Text>
                 <Text style={styles.value}>{value}</Text>
               </View>
-            </View>
+              <Ionicons name="chevron-forward" size={16} color="#cbd5e1" style={styles.chevron} />
+            </TouchableOpacity>
           );
         })}
       </View>
@@ -138,5 +146,8 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     color: '#0f172a',
+  },
+  chevron: {
+    marginLeft: 4,
   },
 });

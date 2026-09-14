@@ -29,7 +29,8 @@ export default function RegisterScreen() {
   // Navigate when user is set after registration
   useEffect(() => {
     if (!authLoading && user) {
-      navigateToRole(user.role);
+      const userRole = typeof user.role === 'string' ? user.role : Array.isArray(user.role) ? String(user.role[0]) : '';
+      navigateToRole(userRole);
     }
   }, [user, authLoading, router]);
 

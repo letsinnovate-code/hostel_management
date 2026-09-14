@@ -2,13 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowRight, Search, Building2, Sparkles } from 'lucide-react';
+import { Search, Building2, Sparkles } from 'lucide-react';
 
 export default function Hero() {
     const [isVisible, setIsVisible] = useState(false);
 
     useEffect(() => {
-        setIsVisible(true);
+        const timer = setTimeout(() => setIsVisible(true), 0);
+        return () => clearTimeout(timer);
     }, []);
 
     return (

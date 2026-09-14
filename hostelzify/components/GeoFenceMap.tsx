@@ -1,20 +1,19 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useGoogleMapsScript } from '../hooks/useGoogleMapsScript';
+import {
+  Bounds,
+  LatLng,
+  getDefaultBoundsAroundHostel,
+  getDefaultPolygonAroundHostel,
+} from './maps/mapTypes';
 
-export interface Bounds {
-  north: number;
-  south: number;
-  east: number;
-  west: number;
-}
+// Re-export types and helpers for full backward compatibility
+export type { Bounds, LatLng };
+export { getDefaultBoundsAroundHostel, getDefaultPolygonAroundHostel };
 
-export interface LatLng {
-  latitude: number;
-  longitude: number;
-}
-
-interface GeoFenceMapProps {
+export interface GeoFenceMapProps {
   hostelLat: number;
   hostelLng: number;
   /** Rectangle bounds (for type rectangle) */
@@ -25,37 +24,6 @@ interface GeoFenceMapProps {
   onPolygonChange?: (coords: LatLng[]) => void;
   height?: string;
   zoom?: number;
-}
-
-declare global {
-  interface Window {
-    google: any;
-  }
-}
-
-const METERS_PER_DEG_LAT = 111320;
-const METERS_PER_DEG_LNG = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 180);
-
-export function getDefaultBoundsAroundHostel(hostelLat: number, hostelLng: number, sizeMeters = 150): Bounds {
-  const dLat = sizeMeters / METERS_PER_DEG_LAT;
-  const dLng = sizeMeters / METERS_PER_DEG_LNG(hostelLat);
-  return {
-    north: hostelLat + dLat / 2,
-    south: hostelLat - dLat / 2,
-    east: hostelLng + dLng / 2,
-    west: hostelLng - dLng / 2,
-  };
-}
-
-/** Returns 4 corners of a quadrilateral (rectangle) around the hostel. */
-export function getDefaultPolygonAroundHostel(hostelLat: number, hostelLng: number, sizeMeters = 150): LatLng[] {
-  const b = getDefaultBoundsAroundHostel(hostelLat, hostelLng, sizeMeters);
-  return [
-    { latitude: b.north, longitude: b.west },
-    { latitude: b.north, longitude: b.east },
-    { latitude: b.south, longitude: b.east },
-    { latitude: b.south, longitude: b.west },
-  ];
 }
 
 export default function GeoFenceMap({
@@ -70,30 +38,16 @@ export default function GeoFenceMap({
 }: GeoFenceMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const [map, setMap] = useState<any>(null);
-  const [marker, setMarker] = useState<any>(null);
-  const [rectangle, setRectangle] = useState<any>(null);
-  const [polygon, setPolygon] = useState<any>(null);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const markerRef = useRef<any>(null);
+  const rectangleRef = useRef<any>(null);
+  const polygonRef = useRef<any>(null);
+  const { isLoaded, loadError } = useGoogleMapsScript('places,geometry');
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && !(window as any).google) {
-      const script = document.createElement('script');
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
-      script.async = true;
-      script.defer = true;
-      script.onload = () => setIsLoaded(true);
-      document.head.appendChild(script);
-    } else if ((window as any).google) {
-      setIsLoaded(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isLoaded || !mapRef.current || !(window as any).google) return;
+    if (!isLoaded || !mapRef.current || !window.google) return;
 
     if (!map) {
-      const google = (window as any).google;
+      const google = window.google;
       const newMap = new google.maps.Map(mapRef.current, {
         center: { lat: hostelLat, lng: hostelLng },
         zoom,
@@ -107,27 +61,27 @@ export default function GeoFenceMap({
         title: 'Hostel',
       });
       setMap(newMap);
-      setMarker(newMarker);
+      markerRef.current = newMarker;
     }
-  }, [isLoaded, hostelLat, hostelLng, zoom]);
+  }, [isLoaded, hostelLat, hostelLng, zoom, map]);
 
   // Rectangle display (when polygon not used)
   useEffect(() => {
-    if (!map || !(window as any).google) return;
-    const google = (window as any).google;
+    if (!map || !window.google) return;
+    const google = window.google;
 
     if (initialPolygon && initialPolygon.length >= 3) {
-      if (rectangle) {
-        rectangle.setMap(null);
-        setRectangle(null);
+      if (rectangleRef.current) {
+        rectangleRef.current.setMap(null);
+        rectangleRef.current = null;
       }
       return;
     }
 
     if (!initialBounds) {
-      if (rectangle) {
-        rectangle.setMap(null);
-        setRectangle(null);
+      if (rectangleRef.current) {
+        rectangleRef.current.setMap(null);
+        rectangleRef.current = null;
       }
       return;
     }
@@ -137,9 +91,9 @@ export default function GeoFenceMap({
       { lat: initialBounds.north, lng: initialBounds.east }
     );
 
-    if (rectangle) {
-      rectangle.setBounds(rectBounds);
-      rectangle.setMap(map);
+    if (rectangleRef.current) {
+      rectangleRef.current.setBounds(rectBounds);
+      rectangleRef.current.setMap(map);
     } else {
       const rect = new google.maps.Rectangle({
         bounds: rectBounds,
@@ -149,22 +103,22 @@ export default function GeoFenceMap({
         strokeColor: '#0a7ea4',
         strokeWeight: 2,
       });
-      setRectangle(rect);
+      rectangleRef.current = rect;
     }
 
     const boundsToFit = rectBounds.extend({ lat: hostelLat, lng: hostelLng });
     map.fitBounds(boundsToFit, 20);
-  }, [map, initialBounds, initialPolygon]);
+  }, [map, initialBounds, initialPolygon, hostelLat, hostelLng]);
 
   // Polygon display (editable quadrilateral)
   useEffect(() => {
-    if (!map || !(window as any).google) return;
-    const google = (window as any).google;
+    if (!map || !window.google) return;
+    const google = window.google;
 
     if (!initialPolygon || initialPolygon.length < 3) {
-      if (polygon) {
-        polygon.setMap(null);
-        setPolygon(null);
+      if (polygonRef.current) {
+        polygonRef.current.setMap(null);
+        polygonRef.current = null;
       }
       return;
     }
@@ -181,15 +135,15 @@ export default function GeoFenceMap({
       onPolygonChange?.(coords);
     };
 
-    if (polygon) {
-      polygon.setPath(path);
-      polygon.setMap(map);
+    if (polygonRef.current) {
+      polygonRef.current.setPath(path);
+      polygonRef.current.setMap(map);
       if (editable) {
-        polygon.setEditable(true);
-        polygon.setDraggable(true);
+        polygonRef.current.setEditable(true);
+        polygonRef.current.setDraggable(true);
       } else {
-        polygon.setEditable(false);
-        polygon.setDraggable(false);
+        polygonRef.current.setEditable(false);
+        polygonRef.current.setDraggable(false);
       }
     } else {
       const poly = new google.maps.Polygon({
@@ -202,7 +156,7 @@ export default function GeoFenceMap({
         editable: !!editable,
         draggable: !!editable,
       });
-      setPolygon(poly);
+      polygonRef.current = poly;
 
       if (editable && onPolygonChange) {
         poly.getPath().addListener('set_at', () => updateFromPath(poly));
@@ -215,19 +169,40 @@ export default function GeoFenceMap({
     path.forEach((pt: { lat: number; lng: number }) => bounds.extend(pt));
     bounds.extend({ lat: hostelLat, lng: hostelLng });
     map.fitBounds(bounds, 20);
-  }, [map, editable, onPolygonChange]);
+  }, [map, initialPolygon, editable, onPolygonChange, hostelLat, hostelLng]);
+
+  if (loadError) {
+    return (
+      <div
+        className="w-full flex items-center justify-center bg-gray-100 rounded-md border border-gray-300 text-gray-500"
+        style={{ height }}
+      >
+        <p className="text-sm">Unable to load Geo-Fence map</p>
+      </div>
+    );
+  }
 
   if (!isLoaded) {
     return (
-      <div className="w-full bg-gray-100 flex items-center justify-center rounded-md" style={{ height }}>
-        <p className="text-gray-600">Loading map...</p>
+      <div
+        className="w-full bg-gray-100 flex items-center justify-center rounded-md border border-gray-200"
+        style={{ height }}
+      >
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mb-2"></div>
+          <p className="text-sm text-gray-500">Loading map...</p>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-1">
-      <div ref={mapRef} className="w-full rounded-md border border-gray-300 overflow-hidden" style={{ height }} />
+      <div
+        ref={mapRef}
+        className="w-full rounded-md border border-gray-300 overflow-hidden"
+        style={{ height }}
+      />
       {editable && initialPolygon && initialPolygon.length >= 3 && (
         <p className="text-sm text-gray-600">
           Drag the corners or edges on the map to resize the boundary. You can get any quadrilateral shape.

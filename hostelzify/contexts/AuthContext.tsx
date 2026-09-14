@@ -3,38 +3,28 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { STORAGE_KEYS } from '../constants/config';
 import api from '../services/api';
+import { AuthUser } from '@hostelzify/api-client';
 
-interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: 'owner' | 'warden' | 'cleaner' | 'supervisor' | 'student' | 'security' | 'superadmin' | string | string[];
-  roles?: string[];
-  currentRole?: string;
-  hasMultipleRoles?: boolean;
-  hostelId?: string;
-  roomId?: string;
-  [key: string]: any;
-}
+export type User = AuthUser;
 
 /** Normalize role to string; use for owner/role checks across the app. */
-export function getRoleString(role: string | string[] | undefined): string | null {
+export function getRoleString(role: AuthUser['role'] | undefined): string | null {
   if (role == null) return null;
   return Array.isArray(role) ? (role[0] ?? null) : String(role);
 }
 
-export function isOwnerUser(user: User | null): boolean {
+export function isOwnerUser(user: AuthUser | null): boolean {
   return getRoleString(user?.role) === 'owner';
 }
 
 interface AuthContextType {
-  user: User | null;
+  user: AuthUser | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<User | void>;
-  register: (data: any) => Promise<User | void>;
+  login: (email: string, password: string) => Promise<AuthUser | void>;
+  register: (data: any) => Promise<AuthUser | void>;
   logout: () => Promise<void>;
-  updateUser: (userData: User) => void;
+  updateUser: (userData: AuthUser) => void;
   setCurrentRole: (role: string) => Promise<void>;
 }
 

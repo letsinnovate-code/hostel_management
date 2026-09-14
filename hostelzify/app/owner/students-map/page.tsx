@@ -28,6 +28,9 @@ declare global {
   }
 }
 
+import { useGoogleMapsScript } from '../../../hooks/useGoogleMapsScript';
+import { useMarkerManager } from '../../../hooks/useMarkerManager';
+
 export default function StudentsMapPage() {
   const { user } = useAuth();
   const { selectedHostel } = useOwnerHostel();
@@ -36,10 +39,8 @@ export default function StudentsMapPage() {
   const [students, setStudents] = useState<StudentWithLocation[]>([]);
   const [hostelCenter, setHostelCenter] = useState<{ lat: number; lng: number } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [mapReady, setMapReady] = useState(false);
+  const { isLoaded: mapReady } = useGoogleMapsScript('places,geometry');
   const [mapInstance, setMapInstance] = useState<any>(null);
-  const markersRef = useRef<any[]>([]);
-  const infoWindowsRef = useRef<any[]>([]);
   const hostelMarkerRef = useRef<any>(null);
 
   useEffect(() => {
@@ -48,20 +49,6 @@ export default function StudentsMapPage() {
       return;
     }
   }, [user, router]);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined' && !window.google) {
-      const script = document.createElement('script');
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry`;
-      script.async = true;
-      script.defer = true;
-      script.onload = () => setMapReady(true);
-      document.head.appendChild(script);
-    } else if (window.google) {
-      setMapReady(true);
-    }
-  }, []);
 
   const loadData = async () => {
     if (!selectedHostel) {
@@ -150,16 +137,11 @@ export default function StudentsMapPage() {
     hostelMarkerRef.current = m;
   }, [mapInstance, hostelCenter]);
 
-  // Plot student markers
+  const { syncMarkers } = useMarkerManager(mapInstance);
+
+  // Plot student markers differentially
   useEffect(() => {
     if (!mapInstance || !window.google) return;
-    const google = window.google;
-
-    // Clear previous markers and info windows
-    markersRef.current.forEach((m) => m.setMap(null));
-    infoWindowsRef.current.forEach((iw) => iw.close());
-    markersRef.current = [];
-    infoWindowsRef.current = [];
 
     const studentsWithLocation = students.filter(
       (s) =>
@@ -168,32 +150,7 @@ export default function StudentsMapPage() {
         typeof s.currentLocation.longitude === 'number'
     );
 
-    if (studentsWithLocation.length === 0) return;
-
-    const bounds = new google.maps.LatLngBounds();
-
-    studentsWithLocation.forEach((student) => {
-      const pos = {
-        lat: student.currentLocation!.latitude,
-        lng: student.currentLocation!.longitude,
-      };
-      bounds.extend(pos);
-
-      const marker = new google.maps.Marker({
-        position: pos,
-        map: mapInstance,
-        title: student.name,
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 10,
-          fillColor: '#2563eb',
-          fillOpacity: 1,
-          strokeColor: '#1d4ed8',
-          strokeWeight: 2,
-        },
-      });
-      markersRef.current.push(marker);
-
+    const markerData = studentsWithLocation.map((student) => {
       const lastUpdate = student.lastLocationUpdate
         ? new Date(student.lastLocationUpdate).toLocaleString()
         : '—';
@@ -206,19 +163,19 @@ export default function StudentsMapPage() {
           <a href="/owner/students/${student._id}" style="font-size: 12px; color: #2563eb; margin-top: 6px; display: inline-block;">View profile →</a>
         </div>
       `;
-      const infoWindow = new google.maps.InfoWindow({ content });
-      infoWindowsRef.current.push(infoWindow);
-
-      marker.addListener('click', () => {
-        infoWindowsRef.current.forEach((iw) => iw.close());
-        infoWindow.open(mapInstance, marker);
-      });
+      return {
+        id: student._id,
+        latitude: student.currentLocation!.latitude,
+        longitude: student.currentLocation!.longitude,
+        title: student.name,
+        color: '#2563eb',
+        strokeColor: '#1d4ed8',
+        contentHtml: content,
+      };
     });
 
-    // Fit bounds to show all markers (and optionally hostel); add a little padding
-    if (hostelCenter) bounds.extend(hostelCenter);
-    mapInstance.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
-  }, [mapInstance, students, hostelCenter]);
+    syncMarkers(markerData, { fitBounds: true });
+  }, [mapInstance, students, syncMarkers]);
 
   const withLocation = students.filter(
     (s) =>

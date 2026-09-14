@@ -21,6 +21,8 @@ export const metadata: Metadata = {
   description: "Hostel Management System - Manage your hostel efficiently",
 };
 
+import QueryProvider from "../providers/QueryProvider";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -32,13 +34,15 @@ export default function RootLayout({
         suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <AuthProvider>
-          <AlertSocketProvider>
-            {children}
-            <ToastContainer />
-            <ConfirmModal />
-          </AlertSocketProvider>
-        </AuthProvider>
+        <QueryProvider>
+          <AuthProvider>
+            <AlertSocketProvider>
+              {children}
+              <ToastContainer />
+              <ConfirmModal />
+            </AlertSocketProvider>
+          </AuthProvider>
+        </QueryProvider>
       </body>
     </html>
   );

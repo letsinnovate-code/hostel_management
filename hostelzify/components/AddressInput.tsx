@@ -33,7 +33,13 @@ export default function AddressInput({
   onGeocode,
   onAddressComponents,
 }: AddressInputProps) {
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const g = (window as any).google;
+      return !!(g && g.maps && g.maps.places && g.maps.places.Autocomplete);
+    }
+    return false;
+  });
   const [searchQuery, setSearchQuery] = useState(value);
   const [mapCenter, setMapCenter] = useState({ lat: 28.6139, lng: 77.2090 }); // Default to Delhi
   const [markerPosition, setMarkerPosition] = useState<{ lat: number; lng: number } | null>(null);
@@ -41,7 +47,7 @@ export default function AddressInput({
   const [selectedPlaceId, setSelectedPlaceId] = useState<string>('');
   const [addressComponents, setAddressComponents] = useState<AddressComponents>({});
   const [map, setMap] = useState<any>(null);
-  const [marker, setMarker] = useState<any>(null);
+  const markerRef = useRef<any>(null);
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [gettingLocation, setGettingLocation] = useState(false);
@@ -100,7 +106,6 @@ export default function AddressInput({
     };
 
     if (checkPlacesLoaded()) {
-      setIsLoaded(true);
       return;
     }
 
@@ -264,8 +269,8 @@ export default function AddressInput({
 
       map.setCenter(position);
 
-      if (marker) {
-        marker.setPosition(position);
+      if (markerRef.current) {
+        markerRef.current.setPosition(position);
       } else {
         const google = (window as any).google;
         const newMarker = new google.maps.Marker({
@@ -312,16 +317,16 @@ export default function AddressInput({
           }
         });
 
-        setMarker(newMarker);
+        markerRef.current = newMarker;
       }
     } else {
       // If no marker position, remove marker if it exists
-      if (marker) {
-        marker.setMap(null);
-        setMarker(null);
+      if (markerRef.current) {
+        markerRef.current.setMap(null);
+        markerRef.current = null;
       }
     }
-  }, [map, markerPosition, marker]);
+  }, [map, markerPosition]);
 
   const handleAddressInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value;

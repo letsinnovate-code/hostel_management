@@ -10,6 +10,8 @@ import { useConfirmModal } from '../../../../components/ConfirmModal';
 import { useToast } from '../../../../components/Toast';
 import api from '../../../../services/api';
 
+import { useGoogleMapsScript } from '../../../../hooks/useGoogleMapsScript';
+
 declare global {
   interface Window { google: any; }
 }
@@ -21,27 +23,13 @@ const PRESENCE_COLOR: Record<string, string> = {
 
 function StudentsMapView({ students }: { students: any[] }) {
   const mapRef = useRef<HTMLDivElement>(null);
-  const [mapReady, setMapReady] = useState(false);
-  const [mapInstance, setMapInstance] = useState<any>(null);
+  const mapInstanceRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
   const infoWindowsRef = useRef<any[]>([]);
+  const { isLoaded: mapReady } = useGoogleMapsScript('places,geometry');
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && !window.google) {
-      const script = document.createElement('script');
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry`;
-      script.async = true;
-      script.defer = true;
-      script.onload = () => setMapReady(true);
-      document.head.appendChild(script);
-    } else if (typeof window !== 'undefined' && window.google) {
-      setMapReady(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!mapReady || !mapRef.current || !window.google || mapInstance) return;
+    if (!mapReady || !mapRef.current || !window.google || mapInstanceRef.current) return;
     const google = window.google;
     const map = new google.maps.Map(mapRef.current, {
       center: { lat: 28.6139, lng: 77.209 },
@@ -50,10 +38,19 @@ function StudentsMapView({ students }: { students: any[] }) {
       streetViewControl: false,
       fullscreenControl: true,
     });
-    setMapInstance(map);
+    mapInstanceRef.current = map;
+
+    return () => {
+      markersRef.current.forEach((m) => m.setMap(null));
+      infoWindowsRef.current.forEach((iw) => iw.close());
+      markersRef.current = [];
+      infoWindowsRef.current = [];
+      mapInstanceRef.current = null;
+    };
   }, [mapReady]);
 
   useEffect(() => {
+    const mapInstance = mapInstanceRef.current;
     if (!mapInstance || !window.google) return;
     const google = window.google;
     markersRef.current.forEach((m) => m.setMap(null));
@@ -96,7 +93,7 @@ function StudentsMapView({ students }: { students: any[] }) {
       });
     });
     mapInstance.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
-  }, [mapInstance, students]);
+  }, [mapReady, students]);
 
   const withLoc = students.filter((s) => s.currentLocation && typeof s.currentLocation.latitude === 'number');
   const withoutLoc = students.filter((s) => !s.currentLocation || typeof s.currentLocation.latitude !== 'number');

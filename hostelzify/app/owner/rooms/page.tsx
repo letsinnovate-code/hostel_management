@@ -9,14 +9,15 @@ import { useToast } from '../../../components/Toast';
 import { useConfirmModal } from '../../../components/ConfirmModal';
 import { Plus, Search, Filter, Eye, Edit, Trash2, Users, Home, Wrench, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 
+import { useRoomsQuery, useDeleteRoomMutation } from '../../../hooks/queries/useRoomsQuery';
+import { useHostelsQuery } from '../../../hooks/queries/useHostelsQuery';
+
 export default function RoomsPage() {
   const { user } = useAuth();
   const router = useRouter();
   const { showToast } = useToast();
   const { confirm } = useConfirmModal();
-  const [loading, setLoading] = useState(true);
-  const [rooms, setRooms] = useState<any[]>([]);
-  const [hostels, setHostels] = useState<any[]>([]);
+
   const [filters, setFilters] = useState({
     hostelId: '',
     status: '',
@@ -27,32 +28,26 @@ export default function RoomsPage() {
   useEffect(() => {
     if (!user || user.role !== 'owner') {
       router.replace('/login');
-      return;
     }
-    loadData();
   }, [user, router]);
 
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const [hostelsRes, roomsRes] = await Promise.all([
-        api.getHostels(),
-        api.getRooms({ hostelId: filters.hostelId || undefined }),
-      ]);
-      const hostelsPayload = hostelsRes?.data ?? hostelsRes;
-      const roomsPayload = roomsRes?.data ?? roomsRes;
-      setHostels(Array.isArray(hostelsPayload) ? hostelsPayload : []);
-      setRooms(Array.isArray(roomsPayload) ? roomsPayload : []);
-    } catch (error: any) {
-      showToast(error.message || 'Failed to load rooms', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // TanStack Query with automatic request cancellation and cache invalidation
+  const { data: hostels = [], isLoading: hostelsLoading } = useHostelsQuery();
+  const {
+    data: rooms = [],
+    isLoading: roomsLoading,
+    isError,
+    error,
+  } = useRoomsQuery({ hostelId: filters.hostelId });
+
+  const deleteRoomMutation = useDeleteRoomMutation();
+  const loading = hostelsLoading || roomsLoading;
 
   useEffect(() => {
-    loadData();
-  }, [filters.hostelId, filters.status, filters.category]);
+    if (isError && error) {
+      showToast((error as any)?.message || 'Failed to load rooms', 'error');
+    }
+  }, [isError, error, showToast]);
 
   const handleDelete = async (room: any) => {
     const result = await confirm({
@@ -65,11 +60,10 @@ export default function RoomsPage() {
 
     if (result) {
       try {
-        await api.deleteRoom(room._id || room.id);
+        await deleteRoomMutation.mutateAsync(room._id || room.id);
         showToast('Room deleted successfully', 'success');
-        loadData();
-      } catch (error: any) {
-        showToast(error.message || 'Failed to delete room', 'error');
+      } catch (err: any) {
+        showToast(err.message || 'Failed to delete room', 'error');
       }
     }
   };

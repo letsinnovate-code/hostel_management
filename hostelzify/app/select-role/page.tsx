@@ -85,42 +85,12 @@ export default function SelectRolePage() {
   const [loading, setLoading] = useState(false);
   const [selectedRole, setSelectedRole] = useState<string>('');
   const [switchingRole, setSwitchingRole] = useState<string | null>(null);
-  const [isSwitching, setIsSwitching] = useState(false);
-
-  useEffect(() => {
+  const [isSwitching] = useState(() => {
     if (typeof window !== 'undefined') {
-      setIsSwitching(window.location.search.includes('switch=true'));
+      return window.location.search.includes('switch=true');
     }
-  }, []);
-
-  useEffect(() => {
-    if (!user) {
-      router.replace('/login');
-      return;
-    }
-
-    const userRoles = user.roles || (user.role ? [user.role] : []);
-    const hasMultipleRoles = userRoles.length > 1;
-
-    if (!hasMultipleRoles && user.role && !isSwitching) {
-      const r = typeof user.role === 'string' ? user.role : userRoles[0];
-      const roleStr = typeof r === 'string' ? r : (Array.isArray(r) ? r[0] : '') ?? '';
-      navigateToRole(roleStr);
-      return;
-    }
-
-    if (user.currentRole && userRoles.includes(user.currentRole) && !switchingRole && !isSwitching) {
-      navigateToRole(user.currentRole);
-      return;
-    }
-
-    if (user.currentRole && userRoles.includes(user.currentRole) && !selectedRole) {
-      setSelectedRole(typeof user.currentRole === 'string' ? user.currentRole : String(user.currentRole ?? ''));
-    } else if (userRoles.length > 0 && !selectedRole) {
-      const first = userRoles[0];
-      setSelectedRole(typeof first === 'string' ? first : (Array.isArray(first) ? first[0] : '') ?? '');
-    }
-  }, [user, router, isSwitching]);
+    return false;
+  });
 
   const navigateToRole = (role: string) => {
     switch (role) {
@@ -145,6 +115,28 @@ export default function SelectRolePage() {
     }
   };
 
+  useEffect(() => {
+    if (!user) {
+      router.replace('/login');
+      return;
+    }
+
+    const userRoles = user.roles || (user.role ? [user.role] : []);
+    const hasMultipleRoles = userRoles.length > 1;
+
+    if (!hasMultipleRoles && user.role && !isSwitching) {
+      const r = typeof user.role === 'string' ? user.role : userRoles[0];
+      const roleStr = typeof r === 'string' ? r : (Array.isArray(r) ? r[0] : '') ?? '';
+      navigateToRole(roleStr);
+      return;
+    }
+
+    if (user.currentRole && userRoles.includes(user.currentRole) && !switchingRole && !isSwitching) {
+      navigateToRole(user.currentRole);
+      return;
+    }
+  }, [user, router, isSwitching, switchingRole]);
+
   const handleRoleSelect = async (role: string) => {
     if (!role) return;
 
@@ -164,6 +156,8 @@ export default function SelectRolePage() {
 
   const userRoles = user?.roles || (user?.role ? [user.role] : []);
   const hasMultipleRoles = userRoles.length > 1;
+  const defaultRole = (user?.currentRole && userRoles.includes(user.currentRole)) ? user.currentRole : (userRoles[0] || '');
+  const activeSelectedRole = selectedRole || (typeof defaultRole === 'string' ? defaultRole : '');
 
   if (!user) {
     return (
@@ -225,7 +219,7 @@ export default function SelectRolePage() {
               if (!config) return null;
 
               const Icon = config.icon;
-              const isSelected = selectedRole === roleKey;
+              const isSelected = activeSelectedRole === roleKey;
               const isCurrentRole = user.currentRole === roleKey;
 
               return (
@@ -297,8 +291,8 @@ export default function SelectRolePage() {
               </button>
             )}
             <button
-              onClick={() => handleRoleSelect(selectedRole)}
-              disabled={!selectedRole || loading || selectedRole === (typeof user.currentRole === 'string' ? user.currentRole : '')}
+              onClick={() => handleRoleSelect(activeSelectedRole)}
+              disabled={!activeSelectedRole || loading || (activeSelectedRole === (typeof user.currentRole === 'string' ? user.currentRole : '') && !isSwitching)}
               className={`
                 px-8 py-3 rounded-xl font-semibold text-white
                 bg-gradient-to-r from-blue-600 to-purple-600
@@ -314,11 +308,11 @@ export default function SelectRolePage() {
                   <Loader2 className="w-5 h-5 animate-spin" />
                   {isSwitching ? 'Switching...' : 'Setting Role...'}
                 </>
-              ) : selectedRole === (typeof user.currentRole === 'string' ? user.currentRole : '') ? (
+              ) : activeSelectedRole === (typeof user.currentRole === 'string' ? user.currentRole : '') && !isSwitching ? (
                 <>Already Selected</>
               ) : (
                 <>
-                  {isSwitching ? 'Switch to' : 'Continue as'} {selectedRole ? roleConfig[selectedRole]?.label : '...'}
+                  {isSwitching ? 'Switch to' : 'Continue as'} {activeSelectedRole ? roleConfig[activeSelectedRole]?.label : '...'}
                   <ArrowRight className="w-5 h-5" />
                 </>
               )}

@@ -1,5 +1,27 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { API_BASE_URL, STORAGE_KEYS } from '../constants/config';
+import {
+  createApiClient,
+  ApiClient,
+  ApiResponse,
+  PaginatedResponse,
+  AuthUser,
+  StudentProfile,
+  Student,
+  Room,
+  Hostel,
+  Attendance,
+  Complaint,
+  Permission,
+  Visitor,
+  Payment,
+  Notification,
+  LoginResponse,
+  RegisterRequest,
+  RegisterResponse,
+} from '@hostelzify/api-client';
+
+export * from '@hostelzify/api-client';
 
 function saveReturnPath(path: string) {
   if (typeof window !== 'undefined' && path && path !== '/login' && path !== '/register') {
@@ -11,74 +33,60 @@ function saveReturnPath(path: string) {
 
 class ApiService {
   private api: AxiosInstance;
+  public readonly sharedClient: ApiClient;
 
   constructor() {
-    this.api = axios.create({
+    this.sharedClient = createApiClient({
       baseURL: API_BASE_URL,
       timeout: 10000,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    // Request interceptor to add token
-    this.api.interceptors.request.use(
-      async (config) => {
+      getToken: () => {
         if (typeof window !== 'undefined') {
-          const token = localStorage.getItem(STORAGE_KEYS.TOKEN);
-          if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
-          }
+          return localStorage.getItem(STORAGE_KEYS.TOKEN);
         }
-        return config;
+        return null;
       },
-      (error) => {
-        return Promise.reject(error);
-      }
-    );
-
-    // Response interceptor for error handling
-    this.api.interceptors.response.use(
-      (response) => response,
-      async (error: AxiosError) => {
-        if (error.response?.status === 401 && typeof window !== 'undefined') {
+      onUnauthorized: async (error) => {
+        if (typeof window !== 'undefined') {
           const isLoginRequest = error.config?.url?.includes('/auth/login');
-          const hadAuthHeader = !!(error.config?.headers?.Authorization || (error.config?.headers as any)?.authorization);
+          const hadAuthHeader = !!(
+            error.config?.headers?.Authorization ||
+            (error.config?.headers as Record<string, unknown> | undefined)?.authorization
+          );
           if (!isLoginRequest && hadAuthHeader) {
             const path = window.location.pathname || '';
             if (path !== '/login') {
               saveReturnPath(path);
               localStorage.removeItem(STORAGE_KEYS.TOKEN);
               localStorage.removeItem(STORAGE_KEYS.USER);
-              document.cookie = 'hostel_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; SameSite=Lax';
-              window.location.href = path.startsWith('/superadmin') ? '/superadmin/login' : '/login';
+              document.cookie =
+                'hostel_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; SameSite=Lax';
+              window.location.href = path.startsWith('/superadmin')
+                ? '/superadmin/login'
+                : '/login';
             }
           }
         }
-        return Promise.reject(error);
-      }
-    );
+      },
+    });
+
+    this.api = this.sharedClient.client.api;
   }
 
   // Auth APIs
-  async login(email: string, password: string) {
-    const response = await this.api.post('/auth/login', { email, password });
-    return response.data;
+  async login(email: string, password: string): Promise<ApiResponse<LoginResponse>> {
+    return this.sharedClient.auth.login({ email, password });
   }
 
-  async register(data: any) {
-    const response = await this.api.post('/auth/register', data);
-    return response.data;
+  async register(data: RegisterRequest): Promise<ApiResponse<RegisterResponse>> {
+    return this.sharedClient.auth.register(data);
   }
 
-  async setCurrentRole(role: string) {
-    const response = await this.api.post('/auth/set-role', { role });
-    return response.data;
+  async setCurrentRole(role: string): Promise<ApiResponse<{ currentRole: string }>> {
+    return this.sharedClient.auth.setCurrentRole(role);
   }
 
-  async getCurrentUser() {
-    const response = await this.api.get('/auth/me');
-    return response.data;
+  async getCurrentUser(): Promise<ApiResponse<AuthUser>> {
+    return this.sharedClient.auth.getCurrentUser();
   }
 
   // QR-based student self-registration (no auth token attached)
@@ -124,8 +132,8 @@ class ApiService {
   }
 
   // Owner APIs
-  async getHostels(params?: Record<string, unknown>) {
-    const response = await this.api.get('/owner/hostels', { params });
+  async getHostels(params?: Record<string, unknown>, options?: { signal?: AbortSignal }) {
+    const response = await this.api.get('/owner/hostels', { params, ...options });
     return response.data?.data ?? response.data ?? [];
   }
 
@@ -417,29 +425,24 @@ class ApiService {
   }
 
   // Room Management
-  async getRooms(params?: any) {
-    const response = await this.api.get('/owner/rooms', { params });
-    return response.data;
+  async getRooms(params?: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<PaginatedResponse<Room>> {
+    return this.sharedClient.rooms.getRooms(params, options);
   }
 
-  async getRoom(roomId: string) {
-    const response = await this.api.get(`/owner/rooms/${roomId}`);
-    return response.data;
+  async getRoom(roomId: string): Promise<ApiResponse<Room>> {
+    return this.sharedClient.rooms.getRoomById(roomId);
   }
 
-  async createRoom(data: any) {
-    const response = await this.api.post('/owner/rooms', data);
-    return response.data;
+  async createRoom(data: Partial<Room>): Promise<ApiResponse<Room>> {
+    return this.sharedClient.rooms.createRoom(data);
   }
 
-  async updateRoom(roomId: string, data: any) {
-    const response = await this.api.put(`/owner/rooms/${roomId}`, data);
-    return response.data;
+  async updateRoom(roomId: string, data: Partial<Room>): Promise<ApiResponse<Room>> {
+    return this.sharedClient.rooms.updateRoom(roomId, data);
   }
 
-  async deleteRoom(roomId: string) {
-    const response = await this.api.delete(`/owner/rooms/${roomId}`);
-    return response.data;
+  async deleteRoom(roomId: string): Promise<ApiResponse<{ message: string }>> {
+    return this.sharedClient.rooms.deleteRoom(roomId);
   }
 
   async uploadRoomImages(roomId: string, images: File[]) {
@@ -824,18 +827,21 @@ class ApiService {
   }
 
   // Attendance Management APIs
-  async getWardenAttendanceSheet(params?: {
-    date?: string;
-    search?: string;
-    roomId?: string;
-    floor?: number | string;
-    course?: string;
-    status?: string;
-    page?: number;
-    limit?: number;
-    hostelId?: string;
-  }) {
-    const response = await this.api.get('/warden/attendance/sheet', { params });
+  async getWardenAttendanceSheet(
+    params?: {
+      date?: string;
+      search?: string;
+      roomId?: string;
+      floor?: number | string;
+      course?: string;
+      status?: string;
+      page?: number;
+      limit?: number;
+      hostelId?: string;
+    },
+    options?: { signal?: AbortSignal }
+  ) {
+    const response = await this.api.get('/warden/attendance/sheet', { params, ...options });
     return response.data;
   }
 

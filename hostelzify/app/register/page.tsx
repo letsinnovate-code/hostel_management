@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -415,22 +415,26 @@ function SimpleRegisterForm() {
 function RegisterContent() {
   const searchParams = useSearchParams();
   const inviteToken = searchParams.get('invite');
-  const [inviteState, setInviteState] = useState<'loading' | 'valid' | 'invalid' | 'none'>('none');
+  const [inviteState, setInviteState] = useState<'loading' | 'valid' | 'invalid' | 'none'>(inviteToken ? 'loading' : 'none');
   const [hostelId, setHostelId] = useState('');
   const [hostelName, setHostelName] = useState('');
 
   useEffect(() => {
-    if (!inviteToken) { setInviteState('none'); return; }
-    setInviteState('loading');
+    if (!inviteToken) return;
+    let active = true;
     api.verifyInviteToken(inviteToken)
       .then(res => {
+        if (!active) return;
         if (res.success && res.data?.hostelId) {
           setHostelId(res.data.hostelId);
           setHostelName(res.data.hostelName || '');
           setInviteState('valid');
         } else { setInviteState('invalid'); }
       })
-      .catch(() => setInviteState('invalid'));
+      .catch(() => {
+        if (active) setInviteState('invalid');
+      });
+    return () => { active = false; };
   }, [inviteToken]);
 
   if (!inviteToken) return <SimpleRegisterForm />;

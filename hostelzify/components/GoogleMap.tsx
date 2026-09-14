@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useGoogleMapsScript } from '../hooks/useGoogleMapsScript';
 
-interface GoogleMapProps {
+export interface GoogleMapProps {
   latitude?: number;
   longitude?: number;
   onLocationChange?: (lat: number, lng: number) => void;
@@ -10,48 +11,27 @@ interface GoogleMapProps {
   zoom?: number;
 }
 
-declare global {
-  interface Window {
-    google: any;
-  }
-}
-
-export default function GoogleMap({ 
-  latitude, 
-  longitude, 
+export default function GoogleMap({
+  latitude,
+  longitude,
   onLocationChange,
   height = '400px',
-  zoom = 15
+  zoom = 15,
 }: GoogleMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const [map, setMap] = useState<any>(null);
-  const [marker, setMarker] = useState<any>(null);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const markerRef = useRef<any>(null);
+  const { isLoaded, loadError } = useGoogleMapsScript('places');
 
   useEffect(() => {
-    // Load Google Maps script
-    if (typeof window !== 'undefined' && !(window as any).google) {
-      const script = document.createElement('script');
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
-      script.async = true;
-      script.defer = true;
-      script.onload = () => setIsLoaded(true);
-      document.head.appendChild(script);
-    } else if ((window as any).google) {
-      setIsLoaded(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isLoaded || !mapRef.current || !(window as any).google) return;
+    if (!isLoaded || !mapRef.current || !window.google) return;
 
     // Initialize map
     if (!map) {
       const initialLat = latitude || 28.6139; // Default to Delhi
-      const initialLng = longitude || 77.2090;
-      
-      const google = (window as any).google;
+      const initialLng = longitude || 77.209;
+
+      const google = window.google;
       const newMap = new google.maps.Map(mapRef.current, {
         center: { lat: initialLat, lng: initialLng },
         zoom: zoom,
@@ -73,23 +53,23 @@ export default function GoogleMap({
         });
       }
     }
-  }, [isLoaded, latitude, longitude, zoom, onLocationChange]);
+  }, [isLoaded, latitude, longitude, zoom, onLocationChange, map]);
 
   useEffect(() => {
-    if (!map || !(window as any).google) return;
+    if (!map || !window.google) return;
 
     // Update map center and marker when coordinates change
     if (latitude && longitude) {
       const position = { lat: latitude, lng: longitude };
-      
+
       // Update map center
       map.setCenter(position);
-      
+
       // Update or create marker
-      if (marker) {
-        marker.setPosition(position);
+      if (markerRef.current) {
+        markerRef.current.setPosition(position);
       } else {
-        const google = (window as any).google;
+        const google = window.google;
         const newMarker = new google.maps.Marker({
           position: position,
           map: map,
@@ -107,28 +87,33 @@ export default function GoogleMap({
           });
         }
 
-        setMarker(newMarker);
+        markerRef.current = newMarker;
       }
     }
-  }, [map, latitude, longitude, onLocationChange]);
+  }, [latitude, longitude, map, onLocationChange]);
 
-  if (!isLoaded) {
+  if (loadError) {
     return (
-      <div 
-        className="w-full bg-gray-100 flex items-center justify-center rounded-md"
+      <div
+        className="w-full flex items-center justify-center bg-gray-100 rounded-lg border border-gray-300 text-gray-500"
         style={{ height }}
       >
-        <p className="text-gray-600">Loading map...</p>
+        <p className="text-sm">Unable to load Google Maps</p>
       </div>
     );
   }
 
   return (
-    <div 
-      ref={mapRef} 
-      className="w-full rounded-md border border-gray-300"
-      style={{ height }}
-    />
+    <div className="w-full relative" style={{ height }}>
+      {!isLoaded && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 rounded-lg border border-gray-300">
+          <div className="text-center">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mb-2"></div>
+            <p className="text-sm text-gray-500">Loading map...</p>
+          </div>
+        </div>
+      )}
+      <div ref={mapRef} className="w-full h-full rounded-lg" />
+    </div>
   );
 }
-

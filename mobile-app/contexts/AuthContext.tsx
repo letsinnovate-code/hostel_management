@@ -6,24 +6,18 @@ import FirebaseNotificationService from '../services/FirebaseNotificationService
 import NotificationService from '../services/NotificationService';
 import LocationService from '../services/LocationService';
 
-interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: 'owner' | 'warden' | 'cleaner' | 'supervisor' | 'student';
-  hostelId?: string;
-  roomId?: string;
-  [key: string]: any;
-}
+import { AuthUser } from '@hostelzify/api-client';
+
+export type User = AuthUser;
 
 interface AuthContextType {
-  user: User | null;
+  user: AuthUser | null;
   token: string | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (data: any) => Promise<void>;
   logout: () => Promise<void>;
-  updateUser: (userData: User) => void;
+  updateUser: (userData: AuthUser) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);

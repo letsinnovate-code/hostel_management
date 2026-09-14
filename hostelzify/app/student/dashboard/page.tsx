@@ -87,7 +87,7 @@ export default function StudentDashboard() {
         api.getStudentOnboardingState().catch(() => ({ data: null })),
       ]);
 
-      let statusData = statusRes?.data ? {
+      const statusData = statusRes?.data ? {
         ...statusRes.data,
         status: statusRes.data.status === 'inside' ? 'checked in' :
           statusRes.data.status === 'outside' ? 'checked out' :

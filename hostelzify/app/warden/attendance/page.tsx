@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useAuth } from '../../../contexts/AuthContext';
 import api from '../../../services/api';
@@ -204,16 +204,26 @@ export default function WardenAttendancePage() {
     loading: false,
   });
 
-  // Load attendance sheet from server
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+
+  // Load attendance sheet from server with request cancellation
   const loadAttendanceSheet = useCallback(
     async (targetDate = selectedDate, isSilent = false) => {
+      // Cancel previous inflight request if user rapidly steps through dates
+      if (activeAbortControllerRef.current) {
+        activeAbortControllerRef.current.abort();
+      }
+      const abortController = new AbortController();
+      activeAbortControllerRef.current = abortController;
+
       if (!isSilent) setLoading(true);
       else setRefreshing(true);
 
       try {
-        const res = await api.getWardenAttendanceSheet({
-          date: targetDate,
-        });
+        const res = await api.getWardenAttendanceSheet(
+          { date: targetDate },
+          { signal: abortController.signal }
+        );
 
         if (res?.success) {
           setAttendanceList(res.data || []);
@@ -227,11 +237,21 @@ export default function WardenAttendancePage() {
           toast.error(res?.message || 'Failed to load attendance');
         }
       } catch (error: any) {
+        if (
+          error?.name === 'CanceledError' ||
+          error?.code === 'ERR_CANCELED' ||
+          error?.message === 'canceled'
+        ) {
+          // Request intentionally canceled on date change
+          return;
+        }
         console.error('Failed to load attendance sheet:', error);
         toast.error(error?.response?.data?.message || error.message || 'Error loading attendance sheet');
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (activeAbortControllerRef.current === abortController) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [selectedDate]
@@ -239,6 +259,9 @@ export default function WardenAttendancePage() {
 
   useEffect(() => {
     loadAttendanceSheet(selectedDate);
+    return () => {
+      activeAbortControllerRef.current?.abort();
+    };
   }, [selectedDate, loadAttendanceSheet]);
 
   // Handle Date Stepping

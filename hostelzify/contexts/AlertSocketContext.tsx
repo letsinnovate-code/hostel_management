@@ -140,21 +140,23 @@ export function AlertSocketProvider({ children }: { children: ReactNode }) {
     });
 
     socketRef.current = socket;
-    setSocketInstance(socket);
 
     // ── Connection ──────────────────────────────────────────────────────────
     socket.on('connect', () => {
       setConnected(true);
+      setSocketInstance(socket);
       console.log('[AlertSocket] Connected', socket.id);
     });
 
     socket.on('connect_error', (err) => {
       setConnected(false);
+      setSocketInstance(null);
       console.warn('[AlertSocket] Connection issue:', err.message);
     });
 
     socket.on('disconnect', (reason) => {
       setConnected(false);
+      setSocketInstance(null);
       console.log('[AlertSocket] Disconnected:', reason);
     });
 

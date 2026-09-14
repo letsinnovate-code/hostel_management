@@ -1,72 +1,60 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios, { AxiosError, AxiosInstance } from "axios";
 import { API_BASE_URL, STORAGE_KEYS } from "../constants/config";
+import {
+  createApiClient,
+  ApiClient,
+  ApiResponse,
+  PaginatedResponse,
+  AuthUser,
+  StudentProfile,
+  Student,
+  Room,
+  Hostel,
+  Attendance,
+  Complaint,
+  Permission,
+  Visitor,
+  Payment,
+  Notification,
+  LoginResponse,
+  RegisterResponse,
+  RegisterRequest,
+  RequestOptions,
+  getApiErrorMessage as sharedGetApiErrorMessage,
+  ApiError,
+} from "@hostelzify/api-client";
+
+export * from "@hostelzify/api-client";
 
 /** Extract a user-friendly message from an API error (backend message, network, or fallback). */
 export function getApiErrorMessage(error: unknown): string {
-  if (axios.isAxiosError(error)) {
-    const msg = error.response?.data?.message;
-    if (typeof msg === "string" && msg.trim()) return msg;
-    if (error.response?.status === 500)
-      return "Server error. Please try again later.";
-    if (error.response?.status === 404) return "Not found.";
-    if (error.response?.status === 401) return "Invalid email or password.";
-    if (error.code === "ECONNABORTED" || error.message?.includes("timeout"))
-      return "Request timed out.";
-    if (error.code === "ERR_NETWORK" || !error.response)
-      return "Network error. Check your connection.";
-  }
-  if (error instanceof Error && error.message) return error.message;
-  return "Something went wrong. Please try again.";
+  return sharedGetApiErrorMessage(error);
 }
 
 class ApiService {
   private api: AxiosInstance;
+  public readonly sharedClient: ApiClient;
   private tokenCache: string | null = null;
 
   constructor() {
-    this.api = axios.create({
+    this.sharedClient = createApiClient({
       baseURL: API_BASE_URL,
       timeout: 10000,
-      headers: {
-        "Content-Type": "application/json",
+      getToken: async () => {
+        if (this.tokenCache != null) return this.tokenCache;
+        const token = await AsyncStorage.getItem(STORAGE_KEYS.TOKEN);
+        if (token) this.tokenCache = token;
+        return token;
+      },
+      onUnauthorized: async () => {
+        this.tokenCache = null;
+        await AsyncStorage.removeItem(STORAGE_KEYS.TOKEN);
+        await AsyncStorage.removeItem(STORAGE_KEYS.USER);
       },
     });
 
-    // Request interceptor: use cached token when possible for faster requests
-    this.api.interceptors.request.use(
-      async (config) => {
-        let token = this.tokenCache;
-        if (token == null) {
-          token = await AsyncStorage.getItem(STORAGE_KEYS.TOKEN);
-          if (token) this.tokenCache = token;
-        }
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
-        // Ngrok free tier shows a browser warning page; this header skips it so we get the API response
-        const base = config.baseURL ?? this.api.defaults.baseURL ?? "";
-        if (typeof base === "string" && base.includes("ngrok")) {
-          config.headers["ngrok-skip-browser-warning"] = "true";
-        }
-        return config;
-      },
-      (error) => Promise.reject(error),
-    );
-
-    // Response interceptor: clear auth and cache on 401
-    this.api.interceptors.response.use(
-      (response) => response,
-      async (error: AxiosError) => {
-        if (error.response?.status === 401) {
-          this.tokenCache = null;
-          await AsyncStorage.removeItem(STORAGE_KEYS.TOKEN);
-          await AsyncStorage.removeItem(STORAGE_KEYS.USER);
-        }
-        const message = getApiErrorMessage(error);
-        return Promise.reject(new Error(message));
-      },
-    );
+    this.api = this.sharedClient.client.api;
   }
 
   /** Call after login so subsequent requests use the new token without reading storage. */
@@ -75,31 +63,22 @@ class ApiService {
   }
 
   // Auth APIs – backend returns { success, data: { id, name, email, role, token, ... } }
-  async login(email: string, password: string) {
-    const response = await this.api.post<{ success: boolean; data: any }>(
-      "/auth/login",
-      { email, password },
-    );
-    const body = response.data;
-    if (!body?.success || !body?.data)
+  async login(email: string, password: string): Promise<ApiResponse<LoginResponse>> {
+    const response = await this.sharedClient.auth.login({ email, password });
+    if (!response?.success || !response?.data)
       throw new Error("Invalid login response");
-    return body;
+    return response;
   }
 
-  async register(data: any) {
-    const response = await this.api.post<{ success: boolean; data: any }>(
-      "/auth/register",
-      data,
-    );
-    const body = response.data;
-    if (!body?.success || !body?.data)
+  async register(data: RegisterRequest): Promise<ApiResponse<RegisterResponse>> {
+    const response = await this.sharedClient.auth.register(data);
+    if (!response?.success || !response?.data)
       throw new Error("Invalid register response");
-    return body;
+    return response;
   }
 
-  async getCurrentUser() {
-    const response = await this.api.get("/auth/me");
-    return response.data;
+  async getCurrentUser(): Promise<ApiResponse<AuthUser>> {
+    return this.sharedClient.auth.getCurrentUser();
   }
 
   // Owner APIs

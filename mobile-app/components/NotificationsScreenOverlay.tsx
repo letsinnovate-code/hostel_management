@@ -12,7 +12,6 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../services/api';
-import { useRouter } from 'expo-router';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotificationsOverlay } from '../contexts/NotificationsOverlayContext';
 
@@ -55,7 +54,6 @@ function formatDate(createdAt?: string) {
 }
 
 export default function NotificationsScreenOverlay() {
-  const router = useRouter();
   const { user } = useAuth();
   const { isVisible, hide } = useNotificationsOverlay();
   const insets = useSafeAreaInsets();
@@ -96,8 +94,7 @@ export default function NotificationsScreenOverlay() {
 
   const closeOverlay = useCallback(() => {
     hide();
-    router.replace('/(student)/dashboard');
-  }, [hide, router]);
+  }, [hide]);
 
   const handleMarkRead = useCallback(async (id: string) => {
     try {
@@ -126,11 +123,10 @@ export default function NotificationsScreenOverlay() {
     if (!isVisible) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       hide();
-      router.replace('/(student)/dashboard');
       return true;
     });
     return () => sub.remove();
-  }, [isVisible, hide, router]);
+  }, [isVisible, hide]);
 
   const renderItem = ({ item }: { item: NotificationItem }) => {
     const icon = getIcon(item.type, item.title);
