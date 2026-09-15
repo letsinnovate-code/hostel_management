@@ -6,6 +6,9 @@ const Complaint = require('../models/Complaint');
 const Room = require('../models/Room');
 const asyncHandler = require('../utils/asyncHandler');
 const { buildRoleQuery } = require('../utils/roleHelper');
+const { logAudit } = require('../utils/auditLogger');
+const { ROLE_PERMISSIONS } = require('../config/roleMappings');
+const AuditLog = require('../models/AuditLog');
 
 // Get all support tickets (for superadmin)
 exports.getAllSupportTickets = asyncHandler(async (req, res) => {
@@ -436,6 +439,12 @@ exports.createOwner = asyncHandler(async (req, res) => {
     phone: String(phone).trim(),
   });
 
+  await logAudit(req, {
+    action: 'CREATE_OWNER',
+    entityType: 'user',
+    entityId: user._id,
+  });
+
   res.status(201).json({
     success: true,
     data: {
@@ -446,5 +455,170 @@ exports.createOwner = asyncHandler(async (req, res) => {
       phone: user.phone,
       message: 'Hostel owner created. They can log in with the provided credentials.',
     },
+  });
+});
+
+// Update user status (Activate/Suspend)
+exports.updateUserStatus = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!['active', 'suspended'].includes(status)) {
+    return res.status(400).json({ success: false, message: 'Invalid status' });
+  }
+
+  const user = await User.findById(id);
+  if (!user) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  const oldStatus = user.status;
+  user.status = status;
+  
+  if (status === 'suspended') {
+    user.tokenVersion = (user.tokenVersion || 0) + 1; // Invalidate sessions
+  }
+  
+  await user.save();
+
+  await logAudit(req, {
+    action: status === 'suspended' ? 'SUSPEND_USER' : 'ACTIVATE_USER',
+    entityType: 'user',
+    entityId: user._id,
+    changes: { before: { status: oldStatus }, after: { status } },
+  });
+
+  res.status(200).json({ success: true, data: user });
+});
+
+// Update hostel status (Approve/Reject/Activate/Deactivate)
+exports.updateHostelStatus = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!['active', 'inactive', 'pending', 'suspended'].includes(status)) {
+    return res.status(400).json({ success: false, message: 'Invalid status' });
+  }
+
+  const hostel = await Hostel.findById(id);
+  if (!hostel) {
+    return res.status(404).json({ success: false, message: 'Hostel not found' });
+  }
+
+  const oldStatus = hostel.status;
+  hostel.status = status;
+  
+  if (status === 'active' && !hostel.isVerified) {
+    hostel.isVerified = true;
+    hostel.verificationDate = new Date();
+  }
+  
+  await hostel.save();
+
+  await logAudit(req, {
+    action: 'UPDATE_HOSTEL_STATUS',
+    entityType: 'hostel',
+    entityId: hostel._id,
+    changes: { before: { status: oldStatus }, after: { status } },
+  });
+
+  res.status(200).json({ success: true, data: hostel });
+});
+
+// Update user role
+exports.updateUserRole = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { roles } = req.body; // Array of roles
+
+  if (!Array.isArray(roles) || roles.length === 0) {
+    return res.status(400).json({ success: false, message: 'Roles must be a non-empty array' });
+  }
+
+  const user = await User.findById(id);
+  if (!user) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  // Prevent modifying superadmins
+  if (user.role.includes('superadmin') || user.roles.includes('superadmin')) {
+    return res.status(403).json({ success: false, message: 'Cannot modify superadmin roles' });
+  }
+
+  const oldRoles = user.roles || user.role;
+  user.role = roles;
+  user.roles = roles;
+  if (!roles.includes(user.currentRole)) {
+    user.currentRole = roles[0];
+  }
+  
+  await user.save();
+
+  await logAudit(req, {
+    action: 'UPDATE_USER_ROLE',
+    entityType: 'user',
+    entityId: user._id,
+    changes: { before: { roles: oldRoles }, after: { roles } },
+  });
+
+  res.status(200).json({ success: true, data: user });
+});
+
+// Get roles and permissions
+exports.getRolesAndPermissions = asyncHandler(async (req, res) => {
+  const rolesWithPermissions = Object.keys(ROLE_PERMISSIONS).map(role => ({
+    name: role,
+    permissions: ROLE_PERMISSIONS[role],
+  }));
+
+  res.status(200).json({ success: true, data: rolesWithPermissions });
+});
+
+// Get audit logs
+exports.getAuditLogs = asyncHandler(async (req, res) => {
+  const { page = 1, limit = 50, action, entityType } = req.query;
+  const filter = {};
+  
+  if (action) filter.action = action;
+  if (entityType) filter.entityType = entityType;
+
+  const logs = await AuditLog.find(filter)
+    .populate('performedBy', 'name email role')
+    .sort({ timestamp: -1 })
+    .skip((page - 1) * limit)
+    .limit(parseInt(limit))
+    .lean();
+
+  const total = await AuditLog.countDocuments(filter);
+
+  res.status(200).json({ 
+    success: true, 
+    count: logs.length, 
+    total,
+    page: parseInt(page),
+    data: logs 
+  });
+});
+
+// Get reports data
+exports.getReports = asyncHandler(async (req, res) => {
+  // Aggregate basic platform reports
+  const last30Days = new Date();
+  last30Days.setDate(last30Days.getDate() - 30);
+
+  const [newUsers, newHostels, newComplaints] = await Promise.all([
+    User.countDocuments({ createdAt: { $gte: last30Days } }),
+    Hostel.countDocuments({ createdAt: { $gte: last30Days } }),
+    Complaint.countDocuments({ createdAt: { $gte: last30Days } }),
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      last30Days: {
+        newUsers,
+        newHostels,
+        newComplaints,
+      }
+    }
   });
 });

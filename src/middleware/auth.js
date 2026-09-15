@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { normalizeRole, resolveCurrentRole, getUserRoles } = require('../utils/roleHelper');
+const { getPermissionsForRoles } = require('../config/roleMappings');
 
 exports.protect = async (req, res, next) => {
   let token;
@@ -50,6 +51,13 @@ exports.protect = async (req, res, next) => {
     const role = normalizeRole(userDoc.role);
     const rolesArray = Array.isArray(userDoc.roles) ? userDoc.roles : [];
 
+    // Build the full set of roles from both `role` (primary) and `roles` (multi-role array)
+    // so getPermissionsForRoles always has the complete picture even when `roles` is empty.
+    const allRoles = [...new Set([
+      ...(role ? [role] : []),
+      ...rolesArray,
+    ])];
+
     req.user = {
       ...userDoc,
       role: role ?? userDoc.role,
@@ -57,6 +65,7 @@ exports.protect = async (req, res, next) => {
       currentRole: resolveCurrentRole(userDoc),
       id: userDoc._id,
       tokenVersion: currentTokenVersion,
+      permissions: getPermissionsForRoles(allRoles),
     };
     next();
   } catch (error) {

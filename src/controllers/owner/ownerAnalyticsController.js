@@ -12,6 +12,7 @@ const User = require('../../models/User');
 const Payment = require('../../models/Payment');
 const AuditLog = require('../../models/AuditLog');
 const Complaint = require('../../models/Complaint');
+const Violation = require('../../models/Violation');
 const { assertOwnsHostel, getOwnerHostelIds, getScopedHostelIds } = require('./ownerHelper');
 
 exports.getDashboardKPIs = async (req, res) => {
@@ -32,18 +33,35 @@ exports.getDashboardKPIs = async (req, res) => {
           emptyRooms: 0,
           totalCapacity: 0,
           totalOccupied: 0,
+          availableBeds: 0,
           overallOccupancyRate: '0.00',
           vacancyRate: '0.00',
+          staffCount: 0,
+          staffByRole: { warden: 0, supervisor: 0, security: 0, cleaner: 0 },
           totalRevenue: 0,
           pendingPayments: 0,
+          pendingFeesAmount: 0,
+          activeComplaints: 0,
+          maintenanceIssues: 0,
           totalViolations: 0,
           pendingViolations: 0,
+          hostelPerformance: {
+            occupancyRate: 0,
+            collectionRate: 100,
+            resolutionRate: 100,
+          },
         },
       });
     }
 
-    const rooms = await Room.find({ hostelId: { $in: scopedHostelIds } });
-    const students = await User.find({ hostelId: { $in: scopedHostelIds }, role: 'student' });
+    const [rooms, students, staffMembers, payments, complaints] = await Promise.all([
+      Room.find({ hostelId: { $in: scopedHostelIds } }),
+      User.find({ hostelId: { $in: scopedHostelIds }, role: 'student' }),
+      User.find({ hostelId: { $in: scopedHostelIds }, role: { $in: ['warden', 'supervisor', 'security', 'cleaner'] } }).lean(),
+      Payment.find({ hostelId: { $in: scopedHostelIds } }).lean(),
+      Complaint.find({ hostelId: { $in: scopedHostelIds } }).lean(),
+    ]);
+
     const studentIds = students.map(s => s._id);
 
     let totalCapacity = 0;
@@ -75,11 +93,30 @@ exports.getDashboardKPIs = async (req, res) => {
       ? ((totalOccupied / totalCapacity) * 100).toFixed(2)
       : '0.00';
     const occupiedRooms = fullyOccupiedRooms + partiallyOccupiedRooms;
+    const availableBeds = Math.max(0, totalCapacity - totalOccupied);
 
-    const payments = await Payment.find({ hostelId: { $in: scopedHostelIds } });
     const violations = studentIds.length > 0
-      ? await Violation.find({ studentId: { $in: studentIds } })
+      ? await Violation.find({ studentId: { $in: studentIds } }).lean()
       : [];
+
+    const paidPayments = payments.filter(p => p.status === 'paid');
+    const pendingPaymentsList = payments.filter(p => p.status === 'pending');
+    const totalRevenue = paidPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+    const pendingFeesAmount = pendingPaymentsList.reduce((sum, p) => sum + (p.amount || 0), 0);
+
+    const staffByRole = {
+      warden: staffMembers.filter(s => s.role === 'warden' || (s.roles && s.roles.includes('warden'))).length,
+      supervisor: staffMembers.filter(s => s.role === 'supervisor' || (s.roles && s.roles.includes('supervisor'))).length,
+      security: staffMembers.filter(s => s.role === 'security' || (s.roles && s.roles.includes('security'))).length,
+      cleaner: staffMembers.filter(s => s.role === 'cleaner' || (s.roles && s.roles.includes('cleaner'))).length,
+    };
+
+    const activeComplaints = complaints.filter(c => c.status === 'open' || c.status === 'in-progress').length;
+    const maintenanceIssues = complaints.filter(c => (c.complaintType === 'maintenance' || c.category === 'maintenance') && (c.status === 'open' || c.status === 'in-progress')).length;
+    const resolvedComplaints = complaints.filter(c => c.status === 'resolved').length;
+    const resolutionRate = complaints.length > 0 ? Math.round((resolvedComplaints / complaints.length) * 100) : 100;
+    const totalBilled = totalRevenue + pendingFeesAmount;
+    const collectionRate = totalBilled > 0 ? Math.round((totalRevenue / totalBilled) * 100) : 100;
 
     const kpis = {
       totalStudents: students.length,
@@ -91,14 +128,25 @@ exports.getDashboardKPIs = async (req, res) => {
       emptyRooms,
       totalCapacity,
       totalOccupied,
+      availableBeds,
       overallOccupancyRate,
       vacancyRate: rooms.length > 0
         ? (((rooms.length - occupiedRooms) / rooms.length) * 100).toFixed(2)
         : '0.00',
-      totalRevenue: payments.filter(p => p.status === 'paid').reduce((sum, p) => sum + (p.amount || 0), 0),
-      pendingPayments: payments.filter(p => p.status === 'pending').length,
+      staffCount: staffMembers.length,
+      staffByRole,
+      totalRevenue,
+      pendingPayments: pendingPaymentsList.length,
+      pendingFeesAmount,
+      activeComplaints,
+      maintenanceIssues,
       totalViolations: violations.length,
       pendingViolations: violations.filter(v => v.status === 'pending').length,
+      hostelPerformance: {
+        occupancyRate: parseFloat(overallOccupancyRate),
+        collectionRate,
+        resolutionRate,
+      },
     };
 
     res.status(200).json({ success: true, data: kpis });

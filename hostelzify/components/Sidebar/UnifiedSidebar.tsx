@@ -11,6 +11,8 @@ import {
   X,
   Shield,
   Building2,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { NAVIGATION_CONFIGS, SidebarRoleConfig, NavItem } from '../../config/navigation';
 
@@ -19,6 +21,8 @@ export interface UnifiedSidebarProps {
   isOpen?: boolean;
   onClose?: () => void;
   config?: SidebarRoleConfig;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 export default function UnifiedSidebar({
@@ -26,6 +30,8 @@ export default function UnifiedSidebar({
   isOpen = false,
   onClose,
   config: customConfig,
+  isCollapsed = false,
+  onToggleCollapse,
 }: UnifiedSidebarProps) {
   const { user, logout } = useAuth();
   const router = useRouter();
@@ -120,7 +126,9 @@ export default function UnifiedSidebar({
         id={sidebarId}
         role="navigation"
         aria-label={`${roleConfig.portalSubtitle} Navigation`}
-        className={`fixed left-0 top-0 h-full w-72 sm:w-80 lg:w-64 bg-gradient-to-b from-gray-50 to-white border-r border-gray-200 shadow-xl z-50 transform transition-all duration-300 ease-in-out ${
+        className={`fixed left-0 top-0 h-full w-72 sm:w-80 ${
+          isCollapsed ? 'lg:w-20' : 'lg:w-64'
+        } bg-gradient-to-b from-gray-50 to-white border-r border-gray-200 shadow-xl z-50 transform transition-all duration-300 ease-in-out ${
           isOpen
             ? 'translate-x-0 opacity-100'
             : '-translate-x-full opacity-0 lg:translate-x-0 lg:opacity-100'
@@ -128,36 +136,66 @@ export default function UnifiedSidebar({
       >
         <div className="flex flex-col h-full">
           {/* Header */}
-          <div className="p-4 border-b border-gray-200 bg-white flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
-                <HeaderIcon className="w-5 h-5" />
+          <div className="p-3.5 border-b border-gray-200 bg-white flex items-center justify-between">
+            <div className={`flex items-center space-x-3 min-w-0 ${isCollapsed ? 'lg:justify-center lg:w-full' : ''}`}>
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20 shrink-0">
+                <HeaderIcon className="w-4.5 h-4.5" />
               </div>
-              <div>
-                <h1 className="font-bold text-gray-900 text-base leading-tight">
+              {!isCollapsed && (
+                <div className="min-w-0 hidden lg:block">
+                  <h1 className="font-bold text-gray-900 text-sm leading-tight truncate">
+                    {roleConfig.portalTitle}
+                  </h1>
+                  <p className="text-[11px] text-gray-500 font-medium truncate">
+                    {roleConfig.portalSubtitle}
+                  </p>
+                </div>
+              )}
+              {/* Always show on mobile regardless of desktop collapsed state */}
+              <div className="min-w-0 lg:hidden">
+                <h1 className="font-bold text-gray-900 text-sm leading-tight truncate">
                   {roleConfig.portalTitle}
                 </h1>
-                <p className="text-xs text-gray-500 font-medium">
+                <p className="text-[11px] text-gray-500 font-medium truncate">
                   {roleConfig.portalSubtitle}
                 </p>
               </div>
             </div>
 
-            {/* Mobile close button */}
-            {onClose && (
-              <button
-                type="button"
-                onClick={onClose}
-                className="lg:hidden p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-900 transition-colors"
-                aria-label="Close navigation"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            )}
+            <div className="flex items-center gap-1">
+              {/* Desktop Collapse / Expand Toggle Button */}
+              {onToggleCollapse && (
+                <button
+                  type="button"
+                  onClick={onToggleCollapse}
+                  title={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+                  className="hidden lg:flex p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                  aria-label={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+                >
+                  {isCollapsed ? (
+                    <PanelLeftOpen className="w-4 h-4 text-blue-600" />
+                  ) : (
+                    <PanelLeftClose className="w-4 h-4" />
+                  )}
+                </button>
+              )}
+
+              {/* Mobile close button */}
+              {onClose && (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="lg:hidden p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+                  aria-label="Close navigation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Navigation Items */}
-          <div className="flex-1 overflow-y-auto py-3 px-3 space-y-1 sidebar-scroll">
+          <div className="flex-1 overflow-y-auto py-3 px-2 sm:px-3 space-y-1 sidebar-scroll">
             {roleConfig.items.map((item: NavItem, index: number) => {
               const Icon = item.icon;
               const hasSubItems = Boolean(item.subItems && item.subItems.length > 0);
@@ -168,12 +206,14 @@ export default function UnifiedSidebar({
               // 1. Item with Sub-Items (Collapsible)
               if (hasSubItems) {
                 return (
-                  <div key={itemTitle || index} className="space-y-0.5">
+                  <div key={itemTitle || index} className="space-y-0.5 group relative">
                     <button
                       type="button"
                       onClick={() => toggleExpand(itemTitle)}
                       aria-expanded={isExpanded}
-                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 ${
+                      className={`w-full flex items-center ${
+                        isCollapsed ? 'lg:justify-center lg:px-2' : 'justify-between px-3'
+                      } py-2 rounded-xl text-xs font-semibold transition-all duration-200 ${
                         itemActive
                           ? 'text-blue-700 bg-blue-50/80 font-bold'
                           : 'text-gray-700 hover:bg-gray-100/80 hover:text-gray-900'
@@ -181,7 +221,7 @@ export default function UnifiedSidebar({
                     >
                       <div className="flex items-center space-x-2.5">
                         <span
-                          className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+                          className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors shrink-0"
                           style={{
                             backgroundColor: itemActive
                               ? `${item.color || '#0a7ea4'}18`
@@ -191,18 +231,25 @@ export default function UnifiedSidebar({
                         >
                           <Icon className="w-4 h-4" />
                         </span>
-                        <span>{itemTitle}</span>
+                        <span className={`truncate ${isCollapsed ? 'lg:hidden' : ''}`}>{itemTitle}</span>
                       </div>
                       <ChevronDown
                         className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${
-                          isExpanded ? 'rotate-180 text-blue-600' : ''
-                        }`}
+                          isCollapsed ? 'lg:hidden' : ''
+                        } ${isExpanded ? 'rotate-180 text-blue-600' : ''}`}
                       />
                     </button>
 
-                    {/* Sub-items List */}
-                    {isExpanded && (
-                      <div className="pl-9 pr-2 py-1 space-y-0.5 animate-fadeIn">
+                    {/* Desktop Collapsed Hover Tooltip */}
+                    {isCollapsed && (
+                      <div className="hidden lg:group-hover:flex absolute left-full ml-2 px-2.5 py-1 bg-slate-900 text-white text-[11px] font-bold rounded-lg shadow-xl whitespace-nowrap z-50 pointer-events-none items-center gap-1.5 animate-fadeIn">
+                        <span>{itemTitle}</span>
+                      </div>
+                    )}
+
+                    {/* Sub-items List (Visible when expanded or on mobile) */}
+                    {isExpanded && (!isCollapsed || true) && (
+                      <div className={`pl-9 pr-2 py-1 space-y-0.5 animate-fadeIn ${isCollapsed ? 'lg:hidden' : ''}`}>
                         {item.subItems!.map((sub) => {
                           const subActive = isActive(sub.href);
                           return (
@@ -229,38 +276,61 @@ export default function UnifiedSidebar({
 
               // 2. Direct Link Item (Flat)
               return (
-                <Link
-                  key={item.href || itemTitle}
-                  href={item.href || '#'}
-                  onClick={onClose}
-                  aria-current={itemActive ? 'page' : undefined}
-                  className={`flex items-center space-x-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 ${
-                    itemActive
-                      ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20 font-bold'
-                      : 'text-gray-700 hover:bg-gray-100/80 hover:text-gray-900'
-                  }`}
-                >
-                  <span
-                    className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                      itemActive ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'
+                <div key={item.href || itemTitle} className="group relative">
+                  <Link
+                    href={item.href || '#'}
+                    onClick={onClose}
+                    aria-current={itemActive ? 'page' : undefined}
+                    className={`flex items-center ${
+                      isCollapsed ? 'lg:justify-center lg:px-2' : 'space-x-2.5 px-3'
+                    } py-2 rounded-xl text-xs font-semibold transition-all duration-200 ${
+                      itemActive
+                        ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20 font-bold'
+                        : 'text-gray-700 hover:bg-gray-100/80 hover:text-gray-900'
                     }`}
                   >
-                    <Icon className="w-4 h-4" />
-                  </span>
-                  <span className="truncate">{itemTitle}</span>
-                </Link>
+                    <span
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                        itemActive ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                    </span>
+                    <span className={`truncate ${isCollapsed ? 'lg:hidden' : ''}`}>{itemTitle}</span>
+                  </Link>
+
+                  {/* Desktop Collapsed Hover Tooltip */}
+                  {isCollapsed && (
+                    <div className="hidden lg:group-hover:flex absolute left-full ml-2 px-2.5 py-1 bg-slate-900 text-white text-[11px] font-bold rounded-lg shadow-xl whitespace-nowrap z-50 pointer-events-none items-center gap-1.5 animate-fadeIn">
+                      <span>{itemTitle}</span>
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
 
           {/* User Profile & Logout Footer */}
           <div className="p-3 border-t border-gray-200 bg-white/80 backdrop-blur-sm space-y-2">
-            <div className="flex items-center justify-between px-2 py-1.5 bg-gray-50/80 rounded-xl border border-gray-100">
+            <div className={`flex items-center ${isCollapsed ? 'lg:justify-center' : 'justify-between'} px-2 py-1.5 bg-gray-50/80 rounded-xl border border-gray-100`}>
               <div className="flex items-center space-x-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-gray-700 to-gray-900 flex items-center justify-center text-white text-xs font-bold shrink-0">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-gray-700 to-gray-900 flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-xs">
                   {userInitial}
                 </div>
-                <div className="min-w-0">
+                {!isCollapsed && (
+                  <div className="min-w-0 hidden lg:block">
+                    <p className="text-xs font-bold text-gray-900 truncate">
+                      {user?.name || roleConfig.badgeLabel}
+                    </p>
+                    <span
+                      className={`inline-block px-1.5 py-0.2 rounded text-[10px] font-semibold text-white ${roleConfig.badgeBg}`}
+                    >
+                      {roleConfig.badgeLabel}
+                    </span>
+                  </div>
+                )}
+                {/* Always show on mobile */}
+                <div className="min-w-0 lg:hidden">
                   <p className="text-xs font-bold text-gray-900 truncate">
                     {user?.name || roleConfig.badgeLabel}
                   </p>
@@ -276,10 +346,13 @@ export default function UnifiedSidebar({
             <button
               type="button"
               onClick={handleLogout}
-              className="w-full flex items-center justify-center space-x-2 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+              title="Log out of console"
+              className={`w-full flex items-center ${
+                isCollapsed ? 'lg:justify-center' : 'justify-center space-x-2'
+              } px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-xl transition-colors`}
             >
-              <LogOut className="w-4 h-4" />
-              <span>Log out</span>
+              <LogOut className="w-4 h-4 shrink-0" />
+              <span className={isCollapsed ? 'lg:hidden' : ''}>Log out</span>
             </button>
           </div>
         </div>

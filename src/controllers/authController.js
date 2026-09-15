@@ -140,14 +140,7 @@ exports.login = asyncHandler(async (req, res) => {
   // Update lastLogin without re-validating the whole document (avoids error when role is stored as array)
   await User.findByIdAndUpdate(user._id, { $set: { lastLogin: new Date() } });
 
-  // Read role from raw document (Mongoose may hide it when stored as array or invalid type)
-  const raw = user.toObject ? user.toObject() : user;
-  let role = normalizeRole(raw.role);
-  // If still missing, get from DB with lean() to avoid schema casting
-  if (role == null) {
-    const doc = await User.findById(user._id).select('role').lean();
-    role = normalizeRole(doc?.role);
-  }
+  // role and raw are already fetched above
   const hostelId = raw.hostelId != null ? raw.hostelId : null;
 
   // Handle multiple roles

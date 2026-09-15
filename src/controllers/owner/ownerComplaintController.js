@@ -14,7 +14,7 @@ const { COMPLAINT_STATUS } = require('../../constants');
 
 exports.getMaintenanceComplaints = async (req, res) => {
   try {
-    const { hostelId, status } = req.query;
+    const { hostelId, status, category, complaintType, priority, search } = req.query;
     const scopedHostelIds = await getScopedHostelIds(req, hostelId);
     if (scopedHostelIds.length === 0) {
       return res.status(200).json({ success: true, count: 0, data: [] });
@@ -22,6 +22,15 @@ exports.getMaintenanceComplaints = async (req, res) => {
 
     const filter = { hostelId: { $in: scopedHostelIds } };
     if (status) filter.status = status;
+    if (category) filter.category = category;
+    if (complaintType) filter.complaintType = complaintType;
+    if (priority) filter.priority = priority;
+    if (search && typeof search === 'string' && search.trim()) {
+      filter.$or = [
+        { title: { $regex: search.trim(), $options: 'i' } },
+        { description: { $regex: search.trim(), $options: 'i' } },
+      ];
+    }
 
     const { complaints } = await ComplaintService.listComplaints({
       filter,
@@ -29,7 +38,7 @@ exports.getMaintenanceComplaints = async (req, res) => {
       populate: [
         { path: 'raisedBy', select: 'name email phone roomId' },
         { path: 'roomId', select: 'roomNumber floorNumber' },
-        { path: 'assignedTo', select: 'name email phone' },
+        { path: 'assignedTo', select: 'name email phone role' },
       ],
       lean: true,
     });
@@ -55,6 +64,27 @@ exports.updateComplaintStatus = async (req, res) => {
       user: req.user,
       ip: req.ip,
       userAgent: req.headers ? req.headers['user-agent'] : undefined,
+    });
+
+    res.status(200).json({ success: true, data: updated });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+exports.assignComplaint = async (req, res) => {
+  try {
+    const { assignedTo, priority } = req.body;
+    const complaint = await Complaint.findById(req.params.id);
+    if (!complaint) {
+      return res.status(404).json({ success: false, message: 'Complaint not found' });
+    }
+    await assertOwnsHostel(req, complaint.hostelId);
+
+    const updated = await ComplaintService.assignComplaint(req.params.id, {
+      assignedTo,
+      priority,
+      user: req.user,
     });
 
     res.status(200).json({ success: true, data: updated });

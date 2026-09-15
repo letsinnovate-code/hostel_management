@@ -9,6 +9,8 @@ const mongoose = require('mongoose');
 const User = require('../../models/User');
 const Violation = require('../../models/Violation');
 const Emergency = require('../../models/Emergency');
+const Notification = require('../../models/Notification');
+const AuditLog = require('../../models/AuditLog');
 const CurfewViolation = require('../../modules/alert/models/CurfewViolation');
 const CurfewAutomationService = require('../../modules/alert/services/CurfewAutomationService');
 const { sendViolationPushToStudent } = require('../../utils/notificationService');
@@ -360,7 +362,26 @@ exports.createViolation = async (req, res) => {
       parentNotifiedAt: parentNotified ? new Date() : undefined,
       parentNotificationMethod: parentNotified ? parentNotificationMethod : undefined,
       parentNotificationNotes: parentNotified ? parentNotificationNotes : undefined,
-      parentContactInfo: parentContactInfo || student.parentContact || '',
+      parentContactInfo: (function() {
+        if (parentContactInfo) {
+          return typeof parentContactInfo === 'object'
+            ? `${parentContactInfo.name || ''} ${parentContactInfo.phone || ''}`.trim()
+            : String(parentContactInfo);
+        }
+        if (student.parentContact) {
+          if (typeof student.parentContact === 'object') {
+            const parts = [
+              student.parentContact.name,
+              student.parentContact.relation ? `(${student.parentContact.relation})` : '',
+              student.parentContact.phone ? `Ph: ${student.parentContact.phone}` : '',
+              student.parentContact.email ? `Email: ${student.parentContact.email}` : ''
+            ].filter(Boolean);
+            return parts.join(' ') || '';
+          }
+          return String(student.parentContact);
+        }
+        return '';
+      })(),
       status: initialStatus,
       remarks: initialRemarksList,
       timeline,

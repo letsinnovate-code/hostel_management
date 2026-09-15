@@ -230,6 +230,46 @@ router.post(
 );
 
 /**
+ * PUT /api/alerts/curfew/schedule
+ * Edit scheduled curfew configuration
+ */
+router.put(
+  '/curfew/schedule',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.updateCurfewSchedule
+);
+
+/**
+ * DELETE /api/alerts/curfew/schedule
+ * Delete/cancel scheduled curfew
+ */
+router.delete(
+  '/curfew/schedule',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.deleteCurfewSchedule
+);
+
+/**
+ * POST /api/alerts/curfew/pause
+ * Pause curfew
+ */
+router.post(
+  '/curfew/pause',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.pauseCurfew
+);
+
+/**
+ * POST /api/alerts/curfew/resume
+ * Resume curfew
+ */
+router.post(
+  '/curfew/resume',
+  authorize('warden', 'owner', 'superadmin'),
+  ctrl.resumeCurfew
+);
+
+/**
  * GET /api/alerts/curfew/active-session
  * Fetch active session, remaining countdown, summary metrics, and student statuses.
  */

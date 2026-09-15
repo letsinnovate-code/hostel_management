@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import { useGoogleMapsScript } from '../hooks/useGoogleMapsScript';
+import { useEffect, useRef, useState } from 'react';
+import type * as LType from 'leaflet';
 import { LatLng, BoundaryData } from './maps/mapTypes';
 
 // Re-export for backward compatibility
@@ -18,160 +18,140 @@ export default function StudentDashboardMap({
   currentLocation,
   height = '200px',
 }: StudentDashboardMapProps) {
-  const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<any>(null);
-  const hostelMarkerRef = useRef<any>(null);
-  const userMarkerRef = useRef<any>(null);
-  const polygonRef = useRef<any>(null);
-  const rectRef = useRef<any>(null);
-  const { isLoaded, loadError } = useGoogleMapsScript('places,geometry');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<LType.Map | null>(null);
+  const hostelMarkerRef = useRef<LType.Marker | null>(null);
+  const userMarkerRef = useRef<LType.Marker | null>(null);
+  const overlayRef = useRef<LType.Layer | null>(null);
+  const [isClient, setIsClient] = useState(false);
 
-  const hostelLat = boundary?.hostel?.latitude ?? 28.6139;
-  const hostelLng = boundary?.hostel?.longitude ?? 77.209;
-  const geoFence = boundary?.geoFence;
-  const polygonPath =
-    geoFence?.type === 'polygon' && geoFence.polygon && geoFence.polygon.length >= 3
-      ? geoFence.polygon.map((p) => ({ lat: p.latitude, lng: p.longitude }))
-      : null;
-  const bounds = geoFence?.type === 'rectangle' && geoFence.bounds ? geoFence.bounds : null;
-
-  // Initialize Map
   useEffect(() => {
-    if (!isLoaded || !mapRef.current || !window.google) return;
-    const google = window.google;
+    setIsClient(true);
+  }, []);
 
-    if (!mapInstanceRef.current) {
-      mapInstanceRef.current = new google.maps.Map(mapRef.current, {
-        center: { lat: hostelLat, lng: hostelLng },
+  const hostelLat = boundary?.hostel?.latitude ?? 23.5235;
+  const hostelLng = boundary?.hostel?.longitude ?? 77.8139;
+  const hostelName = boundary?.hostel?.name || 'Hostel Campus';
+
+  useEffect(() => {
+    if (!isClient || !containerRef.current) return;
+    let isMounted = true;
+
+    import('leaflet').then((L) => {
+      if (!isMounted || !containerRef.current) return;
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+        hostelMarkerRef.current = null;
+        userMarkerRef.current = null;
+        overlayRef.current = null;
+      }
+
+      const map = L.map(containerRef.current, {
+        center: [hostelLat, hostelLng],
         zoom: 16,
-        mapTypeControl: false,
-        streetViewControl: false,
-        fullscreenControl: false,
         zoomControl: true,
       });
-    }
+
+      mapInstanceRef.current = map;
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }).addTo(map);
+
+      // Hostel pin icon
+      const hostelIcon = L.divIcon({
+        className: 'student-hostel-pin',
+        html: `
+          <div style="position:relative;display:flex;align-items:center;justify-content:center;">
+            <div style="position:absolute;width:36px;height:36px;border-radius:50%;background:rgba(37,99,235,0.25);animation:ping 2s cubic-bezier(0,0,0.2,1) infinite;"></div>
+            <div style="width:26px;height:26px;border-radius:50%;background:#2563eb;border:2px solid white;box-shadow:0 3px 8px rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:center;color:white;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                <polyline points="9 22 9 12 15 12 15 22"></polyline>
+              </svg>
+            </div>
+          </div>
+        `,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+      });
+
+      const hostelMarker = L.marker([hostelLat, hostelLng], { icon: hostelIcon })
+        .addTo(map)
+        .bindPopup(`<b>${hostelName}</b>`);
+      hostelMarkerRef.current = hostelMarker;
+
+      // Draw GeoFence boundary
+      const geoFence = boundary?.geoFence;
+      if (geoFence?.type === 'polygon' && geoFence.polygon && geoFence.polygon.length >= 3) {
+        const latLngs: [number, number][] = geoFence.polygon.map((p) => [p.latitude, p.longitude]);
+        const polygon = L.polygon(latLngs, {
+          color: '#0284c7',
+          weight: 2,
+          fillColor: '#0ea5e9',
+          fillOpacity: 0.2,
+        }).addTo(map);
+        overlayRef.current = polygon;
+      } else if (geoFence?.type === 'rectangle' && geoFence.bounds) {
+        const bounds: LType.LatLngBoundsExpression = [
+          [geoFence.bounds.south, geoFence.bounds.west],
+          [geoFence.bounds.north, geoFence.bounds.east],
+        ];
+        const rect = L.rectangle(bounds, {
+          color: '#0284c7',
+          weight: 2,
+          fillColor: '#0ea5e9',
+          fillOpacity: 0.2,
+        }).addTo(map);
+        overlayRef.current = rect;
+      }
+
+      // Draw user location if available
+      if (currentLocation?.latitude != null && currentLocation?.longitude != null) {
+        const userIcon = L.divIcon({
+          className: 'student-user-pin',
+          html: `
+            <div style="position:relative;display:flex;align-items:center;justify-content:center;">
+              <div style="position:absolute;width:30px;height:30px;border-radius:50%;background:rgba(34,197,94,0.35);animation:ping 2s cubic-bezier(0,0,0.2,1) infinite;"></div>
+              <div style="width:20px;height:20px;border-radius:50%;background:#22c55e;border:2.5px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);"></div>
+            </div>
+          `,
+          iconSize: [30, 30],
+          iconAnchor: [15, 15],
+        });
+
+        const userMarker = L.marker([currentLocation.latitude, currentLocation.longitude], {
+          icon: userIcon,
+        })
+          .addTo(map)
+          .bindPopup('<b>You are here</b>');
+        userMarkerRef.current = userMarker;
+
+        const bounds = L.latLngBounds([
+          [hostelLat, hostelLng],
+          [currentLocation.latitude, currentLocation.longitude],
+        ]);
+        map.fitBounds(bounds.pad(0.3));
+      }
+
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 250);
+    });
 
     return () => {
-      if (hostelMarkerRef.current) hostelMarkerRef.current.setMap(null);
-      if (userMarkerRef.current) userMarkerRef.current.setMap(null);
-      if (polygonRef.current) polygonRef.current.setMap(null);
-      if (rectRef.current) rectRef.current.setMap(null);
-      mapInstanceRef.current = null;
+      isMounted = false;
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
     };
-  }, [isLoaded, hostelLat, hostelLng]);
+  }, [isClient, hostelLat, hostelLng, boundary, currentLocation]);
 
-  // Sync Hostel Marker & Boundary
-  useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !window.google) return;
-    const google = window.google;
-
-    // Update or create hostel marker
-    if (!hostelMarkerRef.current) {
-      hostelMarkerRef.current = new google.maps.Marker({
-        position: { lat: hostelLat, lng: hostelLng },
-        map,
-        title: boundary?.hostel?.name || 'Hostel',
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 10,
-          fillColor: '#2563eb',
-          fillOpacity: 1,
-          strokeColor: '#1d4ed8',
-          strokeWeight: 2,
-        },
-      });
-    } else {
-      hostelMarkerRef.current.setPosition({ lat: hostelLat, lng: hostelLng });
-      hostelMarkerRef.current.setTitle(boundary?.hostel?.name || 'Hostel');
-    }
-
-    // Clean up old boundary overlays
-    if (polygonRef.current) {
-      polygonRef.current.setMap(null);
-      polygonRef.current = null;
-    }
-    if (rectRef.current) {
-      rectRef.current.setMap(null);
-      rectRef.current = null;
-    }
-
-    if (polygonPath && polygonPath.length >= 3) {
-      polygonRef.current = new google.maps.Polygon({
-        paths: polygonPath,
-        map,
-        fillColor: '#0ea5e9',
-        fillOpacity: 0.25,
-        strokeColor: '#0284c7',
-        strokeWeight: 2,
-      });
-    } else if (bounds) {
-      const rectBounds = new google.maps.LatLngBounds(
-        { lat: bounds.south, lng: bounds.west },
-        { lat: bounds.north, lng: bounds.east }
-      );
-      rectRef.current = new google.maps.Rectangle({
-        bounds: rectBounds,
-        map,
-        fillColor: '#0ea5e9',
-        fillOpacity: 0.25,
-        strokeColor: '#0284c7',
-        strokeWeight: 2,
-      });
-    }
-  }, [boundary, polygonPath, bounds, hostelLat, hostelLng]);
-
-  // Sync User Location Marker In-place
-  useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !window.google) return;
-    const google = window.google;
-
-    if (currentLocation?.latitude != null && currentLocation?.longitude != null) {
-      const newPos = { lat: currentLocation.latitude, lng: currentLocation.longitude };
-      if (userMarkerRef.current) {
-        userMarkerRef.current.setPosition(newPos);
-      } else {
-        userMarkerRef.current = new google.maps.Marker({
-          position: newPos,
-          map,
-          title: 'You',
-          icon: {
-            path: google.maps.SymbolPath.CIRCLE,
-            scale: 8,
-            fillColor: '#22c55e',
-            fillOpacity: 1,
-            strokeColor: '#16a34a',
-            strokeWeight: 2,
-          },
-        });
-      }
-
-      // Extend bounds to keep both hostel and student visible
-      const latLngBounds = new google.maps.LatLngBounds();
-      latLngBounds.extend({ lat: hostelLat, lng: hostelLng });
-      latLngBounds.extend(newPos);
-      map.fitBounds(latLngBounds, 40);
-    } else {
-      if (userMarkerRef.current) {
-        userMarkerRef.current.setMap(null);
-        userMarkerRef.current = null;
-      }
-    }
-  }, [currentLocation, hostelLat, hostelLng]);
-
-  if (loadError) {
-    return (
-      <div
-        className="w-full rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center text-gray-500"
-        style={{ height }}
-      >
-        <p className="text-sm">Unable to load student map</p>
-      </div>
-    );
-  }
-
-  if (!isLoaded) {
+  if (!isClient) {
     return (
       <div
         className="w-full rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center"
@@ -196,8 +176,8 @@ export default function StudentDashboardMap({
   return (
     <div className="space-y-1">
       <div
-        ref={mapRef}
-        className="w-full rounded-xl border border-gray-200 overflow-hidden"
+        ref={containerRef}
+        className="w-full rounded-xl border border-gray-200 overflow-hidden shadow-inner"
         style={{ height }}
       />
       <p className="text-xs text-gray-500">

@@ -17,9 +17,29 @@ export default function OwnerLayout({ children }: OwnerLayoutProps) {
   const ownerHostel = useOwnerHostelOptional();
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const [settingsDropdownOpen, setSettingsDropdownOpen] = useState(false);
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('owner_sidebar_collapsed');
+      if (stored !== null) {
+        setIsCollapsed(stored === 'true');
+      }
+    } catch (_) {}
+  }, []);
+
+  const toggleCollapse = useCallback(() => {
+    setIsCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('owner_sidebar_collapsed', String(next));
+      } catch (_) {}
+      return next;
+    });
+  }, []);
 
   // Redirect to login if not owner (protects all owner routes)
   useEffect(() => {
@@ -53,11 +73,16 @@ export default function OwnerLayout({ children }: OwnerLayoutProps) {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      {/* Sidebar - stable onClose ref to avoid remount on parent re-render */}
-      <Sidebar isOpen={sidebarOpen} onClose={closeSidebar} />
+      {/* Sidebar - with collapse/expand support */}
+      <Sidebar
+        isOpen={sidebarOpen}
+        onClose={closeSidebar}
+        isCollapsed={isCollapsed}
+        onToggleCollapse={toggleCollapse}
+      />
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col lg:ml-64 w-full">
+      <div className={`flex-1 flex flex-col transition-all duration-300 ${isCollapsed ? 'lg:ml-20' : 'lg:ml-64'} w-full`}>
         {/* Top Bar */}
         <header className="bg-white shadow-sm border-b border-gray-200 lg:static fixed top-0 left-0 right-0 z-30 lg:z-0">
           <div className="px-4 py-3 flex items-center justify-between">
@@ -121,6 +146,17 @@ export default function OwnerLayout({ children }: OwnerLayoutProps) {
                     />
                     <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
                       <div className="py-2">
+                        <Link
+                          href="/select-role?switch=true"
+                          onClick={() => setSettingsDropdownOpen(false)}
+                          className="flex items-center gap-3 px-4 py-2 text-indigo-600 hover:bg-indigo-50 font-medium transition-colors"
+                        >
+                          <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                          </svg>
+                          <span className="text-sm font-semibold">Switch Dashboard</span>
+                        </Link>
+                        <div className="border-t border-gray-100 my-1" />
                         <Link
                           href="/owner/profile"
                           onClick={() => setSettingsDropdownOpen(false)}

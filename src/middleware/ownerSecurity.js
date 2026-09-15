@@ -7,6 +7,7 @@
  */
 
 const Hostel = require('../models/Hostel');
+const { getUserRoles } = require('../utils/roleHelper');
 
 /**
  * Gets the hostels belonging to the authenticated owner.
@@ -14,11 +15,12 @@ const Hostel = require('../models/Hostel');
  * Always use this before querying user/room/payment/etc data.
  */
 async function getOwnerHostelIds(req) {
-  if (req.user?.role === 'superadmin') {
+  const roles = getUserRoles(req.user);
+  if (roles.includes('superadmin')) {
     const allHostels = await Hostel.find({}).select('_id').lean();
     return allHostels.map((h) => h._id);
   }
-  if (req.user?.role === 'warden') {
+  if (roles.includes('warden') || roles.includes('supervisor')) {
     const wardenHostelId = req.user?.hostelId || req.user?.hostel;
     return wardenHostelId ? [wardenHostelId] : [];
   }
@@ -45,10 +47,8 @@ async function assertOwnsHostel(req, hostelId) {
     err.statusCode = 404;
     throw err;
   }
-  const userRole = req.user?.role;
-  const userRoles = Array.isArray(userRole)
-    ? userRole
-    : (req.user?.roles && Array.isArray(req.user.roles) ? [userRole, ...req.user.roles] : [userRole]);
+
+  const userRoles = getUserRoles(req.user);
   const isSuperadmin = userRoles.includes('superadmin');
   const isWarden = userRoles.includes('warden') || userRoles.includes('supervisor');
 
@@ -99,4 +99,3 @@ module.exports = {
   assertHostelIdBelongsToOwner,
   getScopedHostelIds,
 };
-

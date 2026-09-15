@@ -9,14 +9,20 @@ import { MapPin, Users, Bed, Building2, Edit, Eye, Plus, Loader2, Trash2 } from 
 import ConfirmModal, { useConfirmModal } from '../../../components/ConfirmModal';
 import { useToast } from '../../../components/Toast';
 
+import { useOwnerHostel } from '../../../contexts/OwnerHostelContext';
+import { CheckCircle2 } from 'lucide-react';
+
 export default function OwnerHostels() {
   const { user } = useAuth();
   const router = useRouter();
   const { confirm } = useConfirmModal();
   const { showToast } = useToast();
+  const { selectedHostel, setSelectedHostel, refetchHostels } = useOwnerHostel();
   const [hostels, setHostels] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
 
   useEffect(() => {
     if (!user || user.role !== 'owner') {
@@ -53,6 +59,7 @@ export default function OwnerHostels() {
         await api.deleteHostel(hostelId);
         showToast('Hostel deleted successfully', 'success');
         setHostels((prev) => prev.filter((h) => (h._id || h.id) !== hostelId));
+        await refetchHostels();
       } catch (error: any) {
         showToast(error.message || 'Failed to delete hostel', 'error');
       } finally {
@@ -110,6 +117,17 @@ export default function OwnerHostels() {
     }
   };
 
+  const filteredHostels = hostels.filter((h) => {
+    if (typeFilter !== 'all' && h.type?.toLowerCase() !== typeFilter.toLowerCase()) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      const matchName = h.name?.toLowerCase().includes(q);
+      const matchCity = h.address?.city?.toLowerCase().includes(q);
+      if (!matchName && !matchCity) return false;
+    }
+    return true;
+  });
+
   return (
     <div className="min-h-screen bg-gray-50">
         {/* Header */}
@@ -119,16 +137,45 @@ export default function OwnerHostels() {
               <div>
                 <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Manage Hostels</h1>
                 <p className="text-sm text-gray-600 mt-1">
-                  {hostels.length} {hostels.length === 1 ? 'hostel' : 'hostels'} total
+                  {hostels.length} {hostels.length === 1 ? 'hostel' : 'hostels'} total &bull; Active: <b>{hostels.find(h => (h._id || h.id) === selectedHostel)?.name || 'None'}</b>
                 </p>
               </div>
-          <Link
-            href="/owner/hostels/create"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
-          >
+              <Link
+                href="/owner/hostels/create"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium shadow-sm"
+              >
                 <Plus className="w-4 h-4" />
                 Create Hostel
-          </Link>
+              </Link>
+            </div>
+
+            {/* Filter Toolbar */}
+            <div className="mt-4 pt-4 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="relative max-w-sm w-full">
+                <input
+                  type="text"
+                  placeholder="Search hostels by name or city..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-3 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50/50"
+                />
+              </div>
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                {['all', 'boys', 'girls', 'co-ed'].map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setTypeFilter(t)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${
+                      typeFilter === t
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -142,35 +189,42 @@ export default function OwnerHostels() {
                 <p className="text-gray-600">Loading hostels...</p>
               </div>
           </div>
-        ) : hostels.length === 0 ? (
+        ) : filteredHostels.length === 0 ? (
             <div className="bg-white rounded-lg shadow-sm p-12 text-center">
               <Building2 className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">No hostels found</h3>
-              <p className="text-gray-600 mb-6">Get started by creating your first hostel</p>
-              <Link
-                href="/owner/hostels/create"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Create Your First Hostel
-              </Link>
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">No hostels matched</h3>
+              <p className="text-gray-600 mb-6">
+                {hostels.length === 0 ? 'Get started by creating your first hostel' : 'Try adjusting your search query or filter'}
+              </p>
+              {hostels.length === 0 && (
+                <Link
+                  href="/owner/hostels/create"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Create Your First Hostel
+                </Link>
+              )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {hostels.map((hostel, index) => {
+            {filteredHostels.map((hostel, index) => {
               const hostelKey = hostel._id || hostel.id || `hostel-${index}`;
-                const coverImage = getCoverImage(hostel);
-                const occupancyRate = hostel.capacity 
-                  ? Math.round((hostel.currentOccupancy || 0) / hostel.capacity * 100) 
-                  : 0;
+              const isActive = hostelKey === selectedHostel;
+              const coverImage = getCoverImage(hostel);
+              const occupancyRate = hostel.capacity 
+                ? Math.round((hostel.currentOccupancy || 0) / hostel.capacity * 100) 
+                : 0;
 
               return (
                   <div
                     key={hostelKey}
-                    className="bg-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden group"
+                    className={`bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden group border ${
+                      isActive ? 'border-emerald-500 ring-2 ring-emerald-500/20' : 'border-gray-200'
+                    }`}
                   >
                     {/* Cover Image */}
-                    <div className="relative h-48 bg-gradient-to-br from-blue-400 to-blue-600 overflow-hidden">
+                    <div className="relative h-48 bg-gradient-to-br from-blue-400 to-indigo-600 overflow-hidden">
                       {coverImage ? (
                         <img
                           src={coverImage}
@@ -183,14 +237,20 @@ export default function OwnerHostels() {
                         </div>
                       )}
                       {/* Badges */}
-                      <div className="absolute top-3 left-3 flex flex-col gap-2">
+                      <div className="absolute top-3 left-3 flex flex-col gap-1.5">
+                        {isActive && (
+                          <span className="px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-600 text-white shadow-md flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Active Hostel
+                          </span>
+                        )}
                         {hostel.type && (
-                          <span className={`px-2 py-1 rounded-md text-xs font-medium ${getTypeColor(hostel.type)}`}>
+                          <span className={`px-2 py-0.5 rounded-md text-xs font-medium shadow-sm ${getTypeColor(hostel.type)}`}>
                             {hostel.type.charAt(0).toUpperCase() + hostel.type.slice(1)}
                           </span>
                         )}
                         {hostel.status && (
-                          <span className={`px-2 py-1 rounded-md text-xs font-medium ${getStatusColor(hostel.status)}`}>
+                          <span className={`px-2 py-0.5 rounded-md text-xs font-medium shadow-sm ${getStatusColor(hostel.status)}`}>
                             {hostel.status.charAt(0).toUpperCase() + hostel.status.slice(1)}
                           </span>
                         )}
@@ -199,9 +259,23 @@ export default function OwnerHostels() {
 
                     {/* Content */}
                     <div className="p-5">
-                      <h3 className="text-xl font-bold text-gray-900 mb-2 line-clamp-1">
-                        {hostel.name || 'Unnamed Hostel'}
-                      </h3>
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <h3 className="text-lg font-bold text-gray-900 line-clamp-1">
+                          {hostel.name || 'Unnamed Hostel'}
+                        </h3>
+                        {!isActive && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedHostel(hostelKey);
+                              showToast(`Switched active hostel to ${hostel.name}`, 'success');
+                            }}
+                            className="text-xs px-2 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded font-medium transition-colors flex-shrink-0"
+                          >
+                            Set Active
+                          </button>
+                        )}
+                      </div>
                       
                       {/* Address */}
                       <div className="flex items-start gap-2 mb-4">
@@ -212,14 +286,14 @@ export default function OwnerHostels() {
                       </div>
 
                       {/* Stats */}
-                      <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-gray-200">
+                      <div className="grid grid-cols-2 gap-4 mb-4 pb-4 border-b border-gray-100">
                         <div className="flex items-center gap-2">
                           <Users className="w-4 h-4 text-gray-400" />
                           <div>
                             <p className="text-xs text-gray-500">Capacity</p>
                             <p className="text-sm font-semibold text-gray-900">
                               {hostel.capacity || 'N/A'}
-                  </p>
+                            </p>
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -253,7 +327,7 @@ export default function OwnerHostels() {
                             />
                           </div>
                         </div>
-                  )}
+                      )}
 
                       {/* Actions */}
                       <div className="flex gap-2">

@@ -84,6 +84,21 @@ export default function SuperAdminOwnersPage() {
     return () => clearInterval(interval);
   }, []);
 
+  const toggleOwnerStatus = async (ownerId: string, currentStatus: string) => {
+    const newStatus = currentStatus === 'active' ? 'suspended' : 'active';
+    if (!confirm(`Are you sure you want to ${newStatus === 'suspended' ? 'suspend' : 'activate'} this owner?`)) return;
+    
+    try {
+      const res = await api.updateUserStatus(ownerId, newStatus);
+      if (res?.success) {
+        showToast(`Owner ${newStatus} successfully`, 'success');
+        loadOwners(false);
+      }
+    } catch {
+      showToast('Failed to update owner status', 'error');
+    }
+  };
+
   const filteredOwners = owners.filter((owner) => {
     const q = search.toLowerCase().trim();
     const matchesSearch =
@@ -307,10 +322,17 @@ export default function SuperAdminOwnersPage() {
                         <div>
                           <div className="flex items-center gap-2">
                             <h2 className="font-bold text-slate-900 text-base">{owner.name}</h2>
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <button 
+                              onClick={() => toggleOwnerStatus(owner._id, owner.status || 'active')}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors hover:opacity-80 ${
+                                owner.status === 'suspended' 
+                                ? 'bg-rose-50 text-rose-700 border-rose-200' 
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              }`}
+                            >
                               <CheckCircle2 className="w-3 h-3" />
-                              Active
-                            </span>
+                              {owner.status === 'suspended' ? 'Suspended' : 'Active'}
+                            </button>
                           </div>
                           <p className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
                             <Calendar className="w-3 h-3 text-slate-400" />

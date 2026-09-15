@@ -183,6 +183,7 @@ export interface ActiveCurfewSessionResponse {
   hostelAddress?: any;
   timezone: string;
   status: 'ACTIVE' | 'SCHEDULED' | 'INACTIVE' | 'ENDED' | 'CANCELLED';
+  lifecycleState?: 'Scheduled' | 'Upcoming' | 'In Progress' | 'Paused' | 'Completed' | 'Cancelled';
   session?: {
     _id: string;
     hostelId: string;
@@ -326,6 +327,27 @@ class AlertApiService {
 
   async deleteCurfewViolation(violationId: string) {
     const response = await this.api.delete(`/alerts/curfew/${violationId}`);
+    return response.data;
+  }
+
+  async updateCurfewSchedule(hostelIdOrData: string | any, data?: any) {
+    const payload = typeof hostelIdOrData === 'string' ? { ...data, hostelId: hostelIdOrData } : hostelIdOrData;
+    const response = await this.api.put('/alerts/curfew/schedule', payload);
+    return response.data;
+  }
+
+  async deleteCurfewSchedule(hostelId?: string) {
+    const response = await this.api.delete('/alerts/curfew/schedule', { params: { hostelId } });
+    return response.data;
+  }
+
+  async pauseCurfew(hostelId?: string) {
+    const response = await this.api.post('/alerts/curfew/pause', { hostelId });
+    return response.data;
+  }
+
+  async resumeCurfew(hostelId?: string) {
+    const response = await this.api.post('/alerts/curfew/resume', { hostelId });
     return response.data;
   }
 

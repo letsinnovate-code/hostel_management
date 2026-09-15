@@ -33,6 +33,8 @@ import {
   UserCheck,
   Building,
   Radio,
+  Edit3,
+  Pause,
 } from 'lucide-react';
 
 export default function WardenDashboard() {
@@ -77,6 +79,17 @@ export default function WardenDashboard() {
     curfewEndTime: '06:00',
     weekendCurfewTime: '22:00',
     gracePeriodMinutes: 15,
+  });
+
+  const [editCurfewModal, setEditCurfewModal] = useState({
+    open: false,
+    startTime: '21:00',
+    endTime: '06:00',
+    startDate: '',
+    endDate: '',
+    gracePeriodMinutes: 15,
+    recurrenceType: 'daily',
+    selectedDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
   });
 
   // ── Quick Action Modals State ────────────────────────────────────────────────
@@ -234,6 +247,16 @@ export default function WardenDashboard() {
             curfewEndTime: res.data.configuration?.endTime || prev.curfewEndTime,
             gracePeriodMinutes: res.data.configuration?.gracePeriodMinutes || prev.gracePeriodMinutes,
           }));
+          setEditCurfewModal((prev) => ({
+            ...prev,
+            startTime: res.data.configuration?.startTime || prev.startTime,
+            endTime: res.data.configuration?.endTime || prev.endTime,
+            startDate: res.data.configuration?.startDate || prev.startDate,
+            endDate: res.data.configuration?.endDate || prev.endDate,
+            gracePeriodMinutes: res.data.configuration?.gracePeriodMinutes || prev.gracePeriodMinutes,
+            recurrenceType: res.data.configuration?.recurrence?.type || prev.recurrenceType,
+            selectedDays: res.data.configuration?.recurrence?.selectedDays || prev.selectedDays,
+          }));
         }
       }
     } catch (err) {
@@ -373,8 +396,12 @@ export default function WardenDashboard() {
         toast.success('Visitor entry deleted');
         setVisitors((prev) => prev.filter((v) => v._id !== id));
       } else if (type === 'curfew') {
-        await alertApi.deleteCurfewViolation(id);
-        toast.success('Curfew record deleted');
+        const effectiveHostelId = dashboard?.hostel?.id || user?.hostelId;
+        if (effectiveHostelId) {
+          await alertApi.deleteCurfewSchedule(effectiveHostelId);
+          toast.success('Curfew schedule deleted successfully');
+          loadCurfewSchedule(true);
+        }
       }
       setDeleteConfirmModal({ open: false, type: 'permission', id: '', description: '' });
       loadDashboard();
@@ -609,10 +636,89 @@ export default function WardenDashboard() {
     }
   };
 
-  // ── Curfew Status ───────────────────────────────────────────────────────────
+  // ── Curfew Status & Lifecycle State Machine ──────────────────────────────────
   const isCurfewActive = Boolean(
     activeCurfewSession?.status === 'ACTIVE' || dashboard?.curfewStatus?.isCurfewActive
   );
+
+  const curfewLifecycleState = (
+    activeCurfewSession?.lifecycleState ||
+    dashboard?.curfewStatus?.lifecycleState ||
+    (activeCurfewSession?.status === 'ACTIVE' || dashboard?.curfewStatus?.isCurfewActive
+      ? 'In Progress'
+      : activeCurfewSession?.status === 'PAUSED'
+      ? 'Paused'
+      : activeCurfewSession?.status === 'COMPLETED'
+      ? 'Completed'
+      : activeCurfewSession?.status === 'CANCELLED'
+      ? 'Cancelled'
+      : curfewConfigData?.isActive || activeCurfewSession?.status === 'SCHEDULED'
+      ? 'Scheduled'
+      : 'Scheduled')
+  );
+
+  const handleEditCurfewSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const effectiveHostelId = dashboard?.hostel?.id || user?.hostelId;
+    if (!effectiveHostelId) {
+      toast.error('Hostel not identified');
+      return;
+    }
+    setActionLoading('editCurfew');
+    try {
+      await alertApi.updateCurfewSchedule(effectiveHostelId, {
+        startTime: editCurfewModal.startTime,
+        endTime: editCurfewModal.endTime,
+        startDate: editCurfewModal.startDate || undefined,
+        endDate: editCurfewModal.endDate || undefined,
+        gracePeriodMinutes: Number(editCurfewModal.gracePeriodMinutes) || 15,
+        recurrence: {
+          type: editCurfewModal.recurrenceType,
+          selectedDays: editCurfewModal.selectedDays,
+        },
+      });
+      toast.success('Curfew schedule updated successfully');
+      setEditCurfewModal((prev) => ({ ...prev, open: false }));
+      loadCurfewSchedule(true);
+      loadDashboard(true);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || err.message || 'Failed to update curfew schedule');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handlePauseCurfew = async () => {
+    const effectiveHostelId = dashboard?.hostel?.id || user?.hostelId;
+    if (!effectiveHostelId) return;
+    setActionLoading('pauseCurfew');
+    try {
+      await alertApi.pauseCurfew(effectiveHostelId);
+      toast.success('Curfew session paused');
+      loadCurfewSchedule(true);
+      loadDashboard(true);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || err.message || 'Failed to pause curfew');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleResumeCurfew = async () => {
+    const effectiveHostelId = dashboard?.hostel?.id || user?.hostelId;
+    if (!effectiveHostelId) return;
+    setActionLoading('resumeCurfew');
+    try {
+      await alertApi.resumeCurfew(effectiveHostelId);
+      toast.success('Curfew session resumed');
+      loadCurfewSchedule(true);
+      loadDashboard(true);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || err.message || 'Failed to resume curfew');
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   // ── Filters & Search ────────────────────────────────────────────────────────
   const filteredPermissions = permissions.filter((p) => {
@@ -1304,27 +1410,35 @@ export default function WardenDashboard() {
                   </div>
                   <span
                     className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 ${
-                      activeCurfewSession?.status === 'ACTIVE' || isCurfewActive
-                        ? 'bg-rose-500 text-white animate-pulse'
-                        : curfewConfigData?.isActive || activeCurfewSession?.status === 'SCHEDULED'
-                        ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                        : 'bg-slate-800 text-slate-400 border border-slate-700'
+                      curfewLifecycleState === 'In Progress'
+                        ? 'bg-rose-500 text-white animate-pulse shadow-xs shadow-rose-500/30'
+                        : curfewLifecycleState === 'Upcoming'
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                        : curfewLifecycleState === 'Paused'
+                        ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/40'
+                        : curfewLifecycleState === 'Completed'
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                        : curfewLifecycleState === 'Cancelled'
+                        ? 'bg-slate-800 text-slate-400 border border-slate-700'
+                        : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
                     }`}
                   >
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${
-                        activeCurfewSession?.status === 'ACTIVE' || isCurfewActive
+                        curfewLifecycleState === 'In Progress'
                           ? 'bg-white animate-ping'
-                          : curfewConfigData?.isActive || activeCurfewSession?.status === 'SCHEDULED'
-                          ? 'bg-indigo-400'
-                          : 'bg-slate-500'
+                          : curfewLifecycleState === 'Upcoming'
+                          ? 'bg-amber-400 animate-pulse'
+                          : curfewLifecycleState === 'Paused'
+                          ? 'bg-yellow-400'
+                          : curfewLifecycleState === 'Completed'
+                          ? 'bg-emerald-400'
+                          : curfewLifecycleState === 'Cancelled'
+                          ? 'bg-slate-500'
+                          : 'bg-indigo-400'
                       }`}
                     />
-                    {activeCurfewSession?.status === 'ACTIVE' || isCurfewActive
-                      ? 'Curfew In Progress'
-                      : curfewConfigData?.isActive || activeCurfewSession?.status === 'SCHEDULED'
-                      ? 'Scheduled'
-                      : 'Inactive / Standby'}
+                    {curfewLifecycleState}
                   </span>
                 </div>
               </div>
@@ -1367,6 +1481,56 @@ export default function WardenDashboard() {
                   <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
                   <span>Escalation: <strong className="text-white">{curfewConfigData?.escalationPeriodMinutes || 15}m</strong></span>
                 </div>
+              </div>
+
+              {/* Curfew Action Controls: Edit, Pause/Resume, Delete */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setEditCurfewModal((prev) => ({ ...prev, open: true }))}
+                  className="flex-1 py-2 px-3 rounded-xl bg-white/10 hover:bg-white/15 text-white font-semibold text-xs transition flex items-center justify-center gap-1.5 border border-white/10"
+                >
+                  <Edit3 className="w-3.5 h-3.5 text-indigo-300" />
+                  Edit Schedule
+                </button>
+                {curfewLifecycleState === 'In Progress' && (
+                  <button
+                    type="button"
+                    onClick={handlePauseCurfew}
+                    disabled={actionLoading === 'pauseCurfew'}
+                    className="py-2 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-semibold text-xs transition flex items-center gap-1 border border-amber-500/30"
+                  >
+                    <Pause className="w-3.5 h-3.5" />
+                    Pause
+                  </button>
+                )}
+                {curfewLifecycleState === 'Paused' && (
+                  <button
+                    type="button"
+                    onClick={handleResumeCurfew}
+                    disabled={actionLoading === 'resumeCurfew'}
+                    className="py-2 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-semibold text-xs transition flex items-center gap-1 border border-emerald-500/30"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    Resume
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDeleteConfirmModal({
+                      open: true,
+                      type: 'curfew',
+                      id: 'curfew-config',
+                      description: 'Scheduled Curfew Configuration',
+                    })
+                  }
+                  className="py-2 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-semibold text-xs transition flex items-center gap-1 border border-rose-500/30"
+                  title="Delete Curfew"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete
+                </button>
               </div>
 
               {/* Action Button: Navigate to Dedicated Control Center */}
@@ -2447,6 +2611,121 @@ export default function WardenDashboard() {
                 Delete Record
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 10: EDIT SCHEDULED CURFEW ─────────────────────────────────── */}
+      {editCurfewModal.open && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-gray-200 my-8 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <Clock className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-900 text-sm">Edit Scheduled Curfew</h3>
+                  <p className="text-[11px] text-gray-500">Update automated curfew parameters & timings</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditCurfewModal((prev) => ({ ...prev, open: false }))}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditCurfewSubmit} className="space-y-3.5 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Curfew Start Time *</label>
+                  <input
+                    type="time"
+                    required
+                    value={editCurfewModal.startTime}
+                    onChange={(e) => setEditCurfewModal({ ...editCurfewModal, startTime: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Curfew End Time *</label>
+                  <input
+                    type="time"
+                    required
+                    value={editCurfewModal.endTime}
+                    onChange={(e) => setEditCurfewModal({ ...editCurfewModal, endTime: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Grace Period (Mins)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={editCurfewModal.gracePeriodMinutes}
+                    onChange={(e) => setEditCurfewModal({ ...editCurfewModal, gracePeriodMinutes: Number(e.target.value) })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Schedule Recurrence</label>
+                  <select
+                    value={editCurfewModal.recurrenceType}
+                    onChange={(e) => setEditCurfewModal({ ...editCurfewModal, recurrenceType: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="daily">Daily Curfew</option>
+                    <option value="selected_days">Selected Days</option>
+                    <option value="one_time">One-Time Only</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Active From Date</label>
+                  <input
+                    type="date"
+                    value={editCurfewModal.startDate}
+                    onChange={(e) => setEditCurfewModal({ ...editCurfewModal, startDate: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-gray-700 mb-1">Active Until Date</label>
+                  <input
+                    type="date"
+                    value={editCurfewModal.endDate}
+                    onChange={(e) => setEditCurfewModal({ ...editCurfewModal, endDate: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-3 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setEditCurfewModal((prev) => ({ ...prev, open: false }))}
+                  className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-700 font-semibold hover:bg-gray-200 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'editCurfew'}
+                  className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition shadow-xs disabled:opacity-50"
+                >
+                  {actionLoading === 'editCurfew' ? 'Updating...' : 'Save Schedule'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

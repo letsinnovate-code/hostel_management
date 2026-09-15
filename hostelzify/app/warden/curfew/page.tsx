@@ -40,6 +40,9 @@ import {
   History,
   AlertCircle,
   ExternalLink,
+  Trash2,
+  Edit3,
+  Pause,
 } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -122,6 +125,7 @@ export default function WardenCurfewPage() {
   const [confirmManualStartModal, setConfirmManualStartModal] = useState(false);
   const [confirmManualEndModal, setConfirmManualEndModal] = useState(false);
   const [confirmResetModal, setConfirmResetModal] = useState(false);
+  const [confirmDeleteModal, setConfirmDeleteModal] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
   // Student Monitoring Filters
@@ -403,6 +407,64 @@ export default function WardenCurfewPage() {
     }
   };
 
+  const handlePauseCurfew = async () => {
+    if (!hostelId) return;
+    setActionLoading(true);
+    try {
+      await alertApi.pauseCurfew(hostelId);
+      toastManager.show('Curfew session paused.', 'success');
+      await loadActiveCurfew();
+    } catch (err: any) {
+      toastManager.show(err?.response?.data?.message || err.message || 'Failed to pause curfew', 'error');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleResumeCurfew = async () => {
+    if (!hostelId) return;
+    setActionLoading(true);
+    try {
+      await alertApi.resumeCurfew(hostelId);
+      toastManager.show('Curfew session resumed.', 'success');
+      await loadActiveCurfew();
+    } catch (err: any) {
+      toastManager.show(err?.response?.data?.message || err.message || 'Failed to resume curfew', 'error');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeleteCurfew = async () => {
+    if (!hostelId) return;
+    setActionLoading(true);
+    try {
+      await alertApi.deleteCurfewSchedule(hostelId);
+      toastManager.show('Curfew schedule deleted successfully.', 'success');
+      setConfirmDeleteModal(false);
+      await loadActiveCurfew();
+    } catch (err: any) {
+      toastManager.show(err?.response?.data?.message || err.message || 'Failed to delete curfew', 'error');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleEditSchedule = () => {
+    if (sessionData?.configuration) {
+      setStartDate(sessionData.configuration.startDate || new Date().toISOString().split('T')[0]);
+      setStartTime(sessionData.configuration.startTime || '21:00');
+      setEndDate(sessionData.configuration.endDate || sessionData.configuration.startDate || new Date().toISOString().split('T')[0]);
+      setEndTime(sessionData.configuration.endTime || '06:00');
+      if (sessionData.configuration.gracePeriodMinutes) setGracePeriod(sessionData.configuration.gracePeriodMinutes);
+      if (sessionData.configuration.escalationPeriodMinutes) setEscalationPeriod(sessionData.configuration.escalationPeriodMinutes);
+      if (sessionData.configuration.recurrence?.type) setRecurrenceType(sessionData.configuration.recurrence.type as any);
+      if (sessionData.configuration.recurrence?.selectedDays) setSelectedDays(sessionData.configuration.recurrence.selectedDays);
+      toastManager.show('Curfew configuration loaded into editor. Make adjustments and click Set Curfew.', 'info');
+      window.scrollTo({ top: 380, behavior: 'smooth' });
+    }
+  };
+
   // Filtered Students
   const filteredStudents = useMemo(() => {
     if (!sessionData?.students) return [];
@@ -437,6 +499,20 @@ export default function WardenCurfewPage() {
   }, [sessionData?.students, searchQuery, statusFilter, roomFilter, blockFilter]);
 
   const activeStatus = sessionData?.status || 'INACTIVE';
+  const rawStatus = (sessionData?.status as string) || 'INACTIVE';
+  const lifecycleState = sessionData?.lifecycleState || (
+    rawStatus === 'ACTIVE'
+      ? 'In Progress'
+      : rawStatus === 'PAUSED'
+      ? 'Paused'
+      : rawStatus === 'COMPLETED' || rawStatus === 'ENDED'
+      ? 'Completed'
+      : rawStatus === 'CANCELLED'
+      ? 'Cancelled'
+      : sessionData?.configuration?.isActive || rawStatus === 'SCHEDULED'
+      ? 'Scheduled'
+      : 'Scheduled'
+  );
   const summary = sessionData?.summary || {
     totalStudents: 0,
     presentCount: 0,
@@ -483,25 +559,35 @@ export default function WardenCurfewPage() {
               {/* Master Status Badge */}
               <div
                 className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-black tracking-wider uppercase border shadow-sm ${
-                  activeStatus === 'ACTIVE'
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                    : activeStatus === 'SCHEDULED'
+                  lifecycleState === 'In Progress'
+                    ? 'bg-rose-50 text-rose-700 border-rose-300 animate-pulse'
+                    : lifecycleState === 'Upcoming'
                     ? 'bg-amber-50 text-amber-700 border-amber-300'
-                    : activeStatus === 'ENDED'
-                    ? 'bg-blue-50 text-blue-700 border-blue-300'
-                    : 'bg-slate-100 text-slate-700 border-slate-300'
+                    : lifecycleState === 'Paused'
+                    ? 'bg-yellow-50 text-yellow-700 border-yellow-300'
+                    : lifecycleState === 'Completed'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                    : lifecycleState === 'Cancelled'
+                    ? 'bg-slate-100 text-slate-600 border-slate-300'
+                    : 'bg-indigo-50 text-indigo-700 border-indigo-300'
                 }`}
               >
                 <span
                   className={`w-2.5 h-2.5 rounded-full ${
-                    activeStatus === 'ACTIVE'
-                      ? 'bg-emerald-500 animate-ping'
-                      : activeStatus === 'SCHEDULED'
+                    lifecycleState === 'In Progress'
+                      ? 'bg-rose-500 animate-ping'
+                      : lifecycleState === 'Upcoming'
                       ? 'bg-amber-500'
-                      : 'bg-slate-400'
+                      : lifecycleState === 'Paused'
+                      ? 'bg-yellow-500'
+                      : lifecycleState === 'Completed'
+                      ? 'bg-emerald-500'
+                      : lifecycleState === 'Cancelled'
+                      ? 'bg-slate-400'
+                      : 'bg-indigo-500'
                   }`}
                 />
-                ● {activeStatus}
+                ● {lifecycleState}
               </div>
 
               <span className="text-xs text-gray-400">•</span>
@@ -930,11 +1016,30 @@ export default function WardenCurfewPage() {
               </div>
             </div>
 
-            {/* Current Armed Configuration Card */}
+            {/* Scheduled Curfew Card */}
             <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-sm space-y-3">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">
-                Current Configuration
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block">
+                  Scheduled Curfew
+                </span>
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                    lifecycleState === 'In Progress'
+                      ? 'bg-rose-100 text-rose-800 animate-pulse'
+                      : lifecycleState === 'Upcoming'
+                      ? 'bg-amber-100 text-amber-800'
+                      : lifecycleState === 'Paused'
+                      ? 'bg-yellow-100 text-yellow-800'
+                      : lifecycleState === 'Completed'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : lifecycleState === 'Cancelled'
+                      ? 'bg-slate-100 text-slate-700'
+                      : 'bg-indigo-100 text-indigo-800'
+                  }`}
+                >
+                  {lifecycleState}
+                </span>
+              </div>
               {sessionData?.configuration ? (
                 <div className="space-y-2 text-xs">
                   <div className="flex justify-between py-1 border-b border-slate-100">
@@ -961,11 +1066,63 @@ export default function WardenCurfewPage() {
                       {sessionData.configuration.recurrence?.type?.replace('_', ' ')}
                     </span>
                   </div>
+                  <div className="flex justify-between py-1 border-b border-slate-100">
+                    <span className="text-gray-500">Grace Period:</span>
+                    <span className="font-bold text-amber-700">
+                      {sessionData.configuration.gracePeriodMinutes || 15} mins
+                    </span>
+                  </div>
                   <div className="flex justify-between py-1">
                     <span className="text-gray-500">Status:</span>
-                    <span className="font-bold uppercase text-emerald-600">
-                      {sessionData.configuration.status}
+                    <span className="font-bold uppercase text-indigo-600">
+                      {lifecycleState}
                     </span>
+                  </div>
+
+                  {/* Scheduled Curfew Actions: Edit, Pause/Resume, Delete */}
+                  <div className="pt-3 border-t border-slate-100 flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handleEditSchedule}
+                      className="flex-1 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      Edit Schedule
+                    </button>
+                    {lifecycleState === 'In Progress' && (
+                      <button
+                        type="button"
+                        onClick={handlePauseCurfew}
+                        disabled={actionLoading}
+                        className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 font-bold text-xs rounded-xl flex items-center gap-1 transition"
+                        title="Pause Curfew"
+                      >
+                        <Pause className="w-3.5 h-3.5" />
+                        Pause
+                      </button>
+                    )}
+                    {lifecycleState === 'Paused' && (
+                      <button
+                        type="button"
+                        onClick={handleResumeCurfew}
+                        disabled={actionLoading}
+                        className="px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-xs rounded-xl flex items-center gap-1 transition"
+                        title="Resume Curfew"
+                      >
+                        <Play className="w-3.5 h-3.5" />
+                        Resume
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteModal(true)}
+                      disabled={actionLoading}
+                      className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition"
+                      title="Delete Scheduled Curfew"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Delete
+                    </button>
                   </div>
                 </div>
               ) : (
@@ -1671,6 +1828,43 @@ export default function WardenCurfewPage() {
             >
               Continue to Dashboard
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────────────────────
+          MODAL: CONFIRM DELETE CURFEW
+      ───────────────────────────────────────────────────────────────────────────── */}
+      {confirmDeleteModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border border-slate-100 space-y-4 animate-in fade-in zoom-in duration-200">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-xl font-black text-gray-900">Delete Scheduled Curfew?</h3>
+              <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                This will deactivate the curfew schedule and cancel any active or upcoming sessions. Historical violation records and student entry logs are preserved.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteModal(false)}
+                disabled={actionLoading}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold text-gray-600 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteCurfew}
+                disabled={actionLoading}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-md shadow-rose-200 transition"
+              >
+                {actionLoading ? 'Deleting…' : 'Delete Curfew'}
+              </button>
+            </div>
           </div>
         </div>
       )}

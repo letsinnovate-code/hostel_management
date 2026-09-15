@@ -2,98 +2,45 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState, ChangeEvent, MouseEvent, useRef } from 'react';
+import { useEffect, useMemo, useState, ChangeEvent, MouseEvent } from 'react';
 import { Bell, BellOff, Map, List, RefreshCw } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { useAuth } from '../../../../contexts/AuthContext';
 import { useOwnerHostel } from '../../../../contexts/OwnerHostelContext';
 import { useConfirmModal } from '../../../../components/ConfirmModal';
 import { useToast } from '../../../../components/Toast';
 import api from '../../../../services/api';
+import type { StudentMarkerData } from '../../../../components/maps/OSMStudentsMap';
 
-import { useGoogleMapsScript } from '../../../../hooks/useGoogleMapsScript';
-
-declare global {
-  interface Window { google: any; }
-}
+const OSMStudentsMap = dynamic(
+  () => import('../../../../components/maps/OSMStudentsMap'),
+  { ssr: false, loading: () => <div className="flex-1 bg-gray-100 flex items-center justify-center text-xs text-gray-500 rounded-xl m-4">Loading map...</div> }
+);
 
 const PRESENCE_COLOR: Record<string, string> = {
   inside: '#22c55e',
   outside: '#f59e0b',
 };
 
-function StudentsMapView({ students }: { students: any[] }) {
-  const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<any>(null);
-  const markersRef = useRef<any[]>([]);
-  const infoWindowsRef = useRef<any[]>([]);
-  const { isLoaded: mapReady } = useGoogleMapsScript('places,geometry');
-
-  useEffect(() => {
-    if (!mapReady || !mapRef.current || !window.google || mapInstanceRef.current) return;
-    const google = window.google;
-    const map = new google.maps.Map(mapRef.current, {
-      center: { lat: 28.6139, lng: 77.209 },
-      zoom: 14,
-      mapTypeControl: true,
-      streetViewControl: false,
-      fullscreenControl: true,
-    });
-    mapInstanceRef.current = map;
-
-    return () => {
-      markersRef.current.forEach((m) => m.setMap(null));
-      infoWindowsRef.current.forEach((iw) => iw.close());
-      markersRef.current = [];
-      infoWindowsRef.current = [];
-      mapInstanceRef.current = null;
+function StudentsMapView({ students, hostelLat, hostelLng }: { students: any[]; hostelLat: number; hostelLng: number }) {
+  const markers: StudentMarkerData[] = students.map((s: any, idx: number) => {
+    const angle = (idx * 45 * Math.PI) / 180;
+    const dist = 0.0003 + (idx % 3) * 0.0002;
+    return {
+      _id: s._id || s.id || String(idx),
+      name: s.name || 'Student',
+      email: s.email,
+      studentId: s.studentId,
+      room: s.roomNumber || s.room?.roomNumber,
+      currentLocation: {
+        latitude: s.currentLocation?.latitude ?? (hostelLat + dist * Math.cos(angle)),
+        longitude: s.currentLocation?.longitude ?? (hostelLng + dist * Math.sin(angle)),
+        timestamp: s.currentLocation?.timestamp || new Date().toISOString(),
+      },
+      isInside: s.presenceStatus === 'inside' || s.isInside,
+      status: s.presenceStatus === 'inside' ? 'Inside Property' : 'Outside Boundary',
     };
-  }, [mapReady]);
-
-  useEffect(() => {
-    const mapInstance = mapInstanceRef.current;
-    if (!mapInstance || !window.google) return;
-    const google = window.google;
-    markersRef.current.forEach((m) => m.setMap(null));
-    infoWindowsRef.current.forEach((iw) => iw.close());
-    markersRef.current = [];
-    infoWindowsRef.current = [];
-
-    const withLoc = students.filter(
-      (s) => s.currentLocation && typeof s.currentLocation.latitude === 'number'
-    );
-    if (withLoc.length === 0) return;
-
-    const bounds = new google.maps.LatLngBounds();
-    withLoc.forEach((student) => {
-      const pos = { lat: student.currentLocation.latitude, lng: student.currentLocation.longitude };
-      bounds.extend(pos);
-      const color = PRESENCE_COLOR[student.presenceStatus] || '#94a3b8';
-      const marker = new google.maps.Marker({
-        position: pos,
-        map: mapInstance,
-        title: student.name,
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 10,
-          fillColor: color,
-          fillOpacity: 1,
-          strokeColor: '#ffffff',
-          strokeWeight: 2,
-        },
-      });
-      markersRef.current.push(marker);
-      const div = document.createElement('div');
-      div.textContent = student.name;
-      const content = `<div style="padding:8px;font-family:system-ui,sans-serif;min-width:160px;"><p style="margin:0 0 2px;font-weight:600;color:#111;">${div.innerHTML}</p><p style="margin:0;font-size:12px;color:#6b7280;">${student.presenceStatus === 'inside' ? 'Checked In' : student.presenceStatus === 'outside' ? 'Checked Out' : 'Unknown'}</p>${student.email ? `<p style="margin:2px 0 0;font-size:11px;color:#9ca3af;">${student.email}</p>` : ''}</div>`;
-      const iw = new google.maps.InfoWindow({ content });
-      infoWindowsRef.current.push(iw);
-      marker.addListener('click', () => {
-        infoWindowsRef.current.forEach((w) => w.close());
-        iw.open(mapInstance, marker);
-      });
-    });
-    mapInstance.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
-  }, [mapReady, students]);
+  });
 
   const withLoc = students.filter((s) => s.currentLocation && typeof s.currentLocation.latitude === 'number');
   const withoutLoc = students.filter((s) => !s.currentLocation || typeof s.currentLocation.latitude !== 'number');
@@ -101,13 +48,12 @@ function StudentsMapView({ students }: { students: any[] }) {
   return (
     <div className="flex flex-col md:flex-row" style={{ minHeight: '500px' }}>
       <div className="flex-1 relative min-h-[350px] md:min-h-0">
-        {!mapReady ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 m-4 rounded-xl">
-            <p className="text-sm text-gray-500">Loading map...</p>
-          </div>
-        ) : (
-          <div ref={mapRef} className="absolute inset-0 m-4 rounded-xl border border-gray-200 overflow-hidden" />
-        )}
+        <OSMStudentsMap
+          hostelLat={hostelLat}
+          hostelLng={hostelLng}
+          students={markers}
+          height="100%"
+        />
       </div>
       <aside className="w-full md:w-72 bg-white border-t md:border-t-0 md:border-l border-gray-200 flex flex-col overflow-hidden max-h-[350px] md:max-h-none">
         <div className="p-4 border-b border-gray-200">
@@ -143,6 +89,7 @@ function StudentsMapView({ students }: { students: any[] }) {
     </div>
   );
 }
+
 
 const STATUS_FILTERS = [
   { label: 'All', value: 'all' },
@@ -191,11 +138,23 @@ export default function OwnerStudentsPresencePage() {
   const { showToast } = useToast();
   const { confirm } = useConfirmModal();
 
-  const { selectedHostel, hostels, loading: hostelsLoading } = useOwnerHostel();
+  const { selectedHostel, hostels, loading: hostelsLoading, activeHostel } = useOwnerHostel();
+
   const [students, setStudents] = useState<any[]>([]);
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'map'>('table');
+
+  // Hostel coordinate extraction — tries both storage formats
+  const hostelLat: number =
+    (activeHostel as any)?.address?.coordinates?.latitude ??
+    (activeHostel as any)?.location?.coordinates?.[1] ??
+    23.5235;
+  const hostelLng: number =
+    (activeHostel as any)?.address?.coordinates?.longitude ??
+    (activeHostel as any)?.location?.coordinates?.[0] ??
+    77.8139;
+
 
   useEffect(() => {
     if (!user) return;
@@ -378,9 +337,10 @@ export default function OwnerStudentsPresencePage() {
         <>
           {/* Map view */}
           {viewMode === 'map' && (
-            <div className="bg-white border-t border-gray-200">
-              <StudentsMapView students={students} />
+            <div className="bg-white border-t border-gray-200" style={{ minHeight: 500 }}>
+              <StudentsMapView students={students} hostelLat={hostelLat} hostelLng={hostelLng} />
             </div>
+
           )}
 
       {viewMode === 'table' && <div className="px-6 py-6 space-y-6">

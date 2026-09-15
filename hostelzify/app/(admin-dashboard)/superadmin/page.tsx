@@ -348,6 +348,57 @@ export default function SuperAdminPage() {
               <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-1 transition" />
             </Link>
 
+            {/* Roles & Permissions */}
+            <Link
+              href="/superadmin/roles-permissions"
+              className="flex items-center justify-between bg-white rounded-2xl p-4 border border-slate-200/80 hover:border-fuchsia-400 hover:bg-fuchsia-50/30 transition shadow-xs group"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="p-3 bg-fuchsia-100 text-fuchsia-700 rounded-xl group-hover:scale-105 transition">
+                  <Shield className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Roles & Permissions</h3>
+                  <p className="text-xs text-slate-500">View PBAC definitions</p>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-fuchsia-600 group-hover:translate-x-1 transition" />
+            </Link>
+
+            {/* Audit Logs */}
+            <Link
+              href="/superadmin/audit-logs"
+              className="flex items-center justify-between bg-white rounded-2xl p-4 border border-slate-200/80 hover:border-amber-400 hover:bg-amber-50/30 transition shadow-xs group"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="p-3 bg-amber-100 text-amber-700 rounded-xl group-hover:scale-105 transition">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Audit Logs</h3>
+                  <p className="text-xs text-slate-500">Track sensitive platform actions</p>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-amber-600 group-hover:translate-x-1 transition" />
+            </Link>
+
+            {/* Platform Reports */}
+            <Link
+              href="/superadmin/reports"
+              className="flex items-center justify-between bg-white rounded-2xl p-4 border border-slate-200/80 hover:border-rose-400 hover:bg-rose-50/30 transition shadow-xs group"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="p-3 bg-rose-100 text-rose-700 rounded-xl group-hover:scale-105 transition">
+                  <LayoutGrid className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Platform Reports</h3>
+                  <p className="text-xs text-slate-500">Aggregated statistics and trends</p>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-rose-600 group-hover:translate-x-1 transition" />
+            </Link>
+
             {/* Support Tickets */}
             <Link
               href="/superadmin/support-tickets"

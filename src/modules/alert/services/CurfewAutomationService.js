@@ -318,6 +318,220 @@ class CurfewAutomationService {
   }
 
   /**
+   * Determine exact Curfew Lifecycle State from 6 distinct states:
+   * - 'Scheduled': Configured/scheduled for future (> 60m away)
+   * - 'Upcoming': Starting soon (<= 60m away)
+   * - 'In Progress': Currently running
+   * - 'Paused': Temporarily paused
+   * - 'Completed': Session duration ended
+   * - 'Cancelled': Cancelled or deleted
+   */
+  static computeLifecycleState(session, configuration, now = new Date()) {
+    if (!session && !configuration) {
+      return 'Cancelled';
+    }
+    if (session?.status === 'CANCELLED' || (!session && configuration?.status === 'cancelled') || (!session && configuration && !configuration.isActive)) {
+      return 'Cancelled';
+    }
+    if (session?.status === 'PAUSED' || configuration?.status === 'paused') {
+      return 'Paused';
+    }
+    if (session?.status === 'COMPLETED') {
+      return 'Completed';
+    }
+    if (session?.status === 'ACTIVE') {
+      if (session.scheduledEndAt && now > new Date(session.scheduledEndAt)) {
+        return 'Completed';
+      }
+      return 'In Progress';
+    }
+    if (session?.status === 'SCHEDULED' || configuration?.isActive) {
+      const startAt = session?.scheduledStartAt ? new Date(session.scheduledStartAt) : null;
+      const endAt = session?.scheduledEndAt ? new Date(session.scheduledEndAt) : null;
+      if (startAt && endAt && now >= startAt && now <= endAt) {
+        return 'In Progress';
+      }
+      if (endAt && now > endAt) {
+        return 'Completed';
+      }
+      if (startAt) {
+        const diffMs = startAt.getTime() - now.getTime();
+        if (diffMs > 0 && diffMs <= 60 * 60 * 1000) {
+          return 'Upcoming';
+        }
+        if (diffMs > 60 * 60 * 1000) {
+          return 'Scheduled';
+        }
+      }
+      return 'Scheduled';
+    }
+    return 'Cancelled';
+  }
+
+  /**
+   * Update scheduled curfew timings and configuration.
+   */
+  static async updateCurfewSchedule(hostelId, updateData, user) {
+    const userId = user?.id || user?._id;
+    const {
+      startTime,
+      endTime,
+      startDate,
+      endDate,
+      gracePeriodMinutes,
+      recurrence,
+      escalationLevels,
+    } = updateData;
+
+    let config = await CurfewConfiguration.findOne({ hostelId, isActive: true }).sort({ createdAt: -1 });
+    if (!config) {
+      const today = new Date().toISOString().split('T')[0];
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+      const sTime = updateData.startTime || '22:00';
+      const eTime = updateData.endTime || '06:00';
+      const sDate = updateData.startDate || today;
+      const eDate = updateData.endDate || (eTime <= sTime ? tomorrow : today);
+
+      return await this.setCurfewSchedule(hostelId, {
+        startDate: sDate,
+        startTime: sTime,
+        endDate: eDate,
+        endTime: eTime,
+        gracePeriodMinutes: updateData.gracePeriodMinutes || 15,
+        recurrence: updateData.recurrence || { type: 'daily' },
+      }, user);
+    }
+
+    if (startTime) config.startTime = startTime;
+    if (endTime) config.endTime = endTime;
+    if (startDate) config.startDate = startDate;
+    if (endDate) config.endDate = endDate;
+    if (gracePeriodMinutes !== undefined) config.gracePeriodMinutes = Number(gracePeriodMinutes);
+    if (recurrence) config.recurrence = { ...config.recurrence, ...recurrence };
+    if (escalationLevels) config.escalationLevels = escalationLevels;
+
+    if (config.startDate && config.startTime && config.endDate && config.endTime) {
+      try {
+        const duration = this.calculateDuration(config.startDate, config.startTime, config.endDate, config.endTime, config.timezone || 'Asia/Kolkata');
+        config.durationMinutes = duration.durationMinutes;
+        config.durationDisplay = duration.durationDisplay;
+      } catch (_) {}
+    }
+
+    if (!config.history) config.history = [];
+    config.history.push({
+      action: 'UPDATED',
+      actionBy: userId,
+      timestamp: new Date(),
+      note: `Updated curfew schedule: ${config.startTime} - ${config.endTime}`,
+    });
+
+    await config.save();
+
+    const scheduledSession = await CurfewSession.findOne({ hostelId, status: 'SCHEDULED' });
+    if (scheduledSession) {
+      if (startTime) scheduledSession.curfewStartTime = startTime;
+      if (endTime) scheduledSession.curfewEndTime = endTime;
+      if (startDate && startTime) {
+        const [sh, sm] = startTime.split(':').map(Number);
+        const [sy, smo, sd] = startDate.split('-').map(Number);
+        scheduledSession.scheduledStartAt = new Date(sy, smo - 1, sd, sh || 0, sm || 0, 0);
+      }
+      if (endDate && endTime) {
+        const [eh, em] = endTime.split(':').map(Number);
+        const [ey, emo, ed] = endDate.split('-').map(Number);
+        scheduledSession.scheduledEndAt = new Date(ey, emo - 1, ed, eh || 0, em || 0, 0);
+      }
+      await scheduledSession.save();
+    }
+
+    emitToRole('warden', hostelId, 'curfew:schedule_updated', { hostelId, configuration: config });
+    emitToRole('owner', hostelId, 'curfew:schedule_updated', { hostelId, configuration: config });
+
+    return { success: true, message: 'Scheduled curfew updated successfully', configuration: config };
+  }
+
+  /**
+   * Delete / Cancel Curfew Configuration and scheduled sessions completely.
+   */
+  static async deleteCurfewSchedule(hostelId, user) {
+    const userId = user?.id || user?._id;
+
+    await CurfewConfiguration.updateMany(
+      { hostelId, isActive: true },
+      {
+        $set: { isActive: false, status: 'cancelled' },
+        $push: {
+          history: {
+            action: 'DELETED',
+            actionBy: userId,
+            timestamp: new Date(),
+            note: 'Curfew schedule deleted by user',
+          },
+        },
+      }
+    );
+
+    await CurfewSession.updateMany(
+      { hostelId, status: { $in: ['SCHEDULED', 'ACTIVE', 'PAUSED'] } },
+      {
+        $set: {
+          status: 'CANCELLED',
+          actualEndAt: new Date(),
+          notes: 'Cancelled due to curfew deletion',
+          endedBy: userId,
+        },
+      }
+    );
+
+    await Hostel.updateOne(
+      { _id: hostelId },
+      { $set: { 'rules.isManualCurfewActive': false, 'rules.manualCurfewEndedAt': new Date() } }
+    );
+
+    emitToRole('warden', hostelId, 'curfew:deleted', { hostelId, deletedBy: userId, timestamp: new Date() });
+    emitToRole('owner', hostelId, 'curfew:deleted', { hostelId, deletedBy: userId, timestamp: new Date() });
+
+    return { success: true, message: 'Curfew schedule deleted successfully' };
+  }
+
+  /**
+   * Pause curfew.
+   */
+  static async pauseCurfew(hostelId, user) {
+    const userId = user?.id || user?._id;
+    await CurfewSession.updateMany(
+      { hostelId, status: { $in: ['ACTIVE', 'SCHEDULED'] } },
+      { $set: { status: 'PAUSED', notes: 'Curfew paused by warden' } }
+    );
+    await CurfewConfiguration.updateMany(
+      { hostelId, isActive: true },
+      { $set: { status: 'paused' } }
+    );
+    emitToRole('warden', hostelId, 'curfew:paused', { hostelId, pausedBy: userId, timestamp: new Date() });
+    emitToRole('owner', hostelId, 'curfew:paused', { hostelId, pausedBy: userId, timestamp: new Date() });
+    return { success: true, message: 'Curfew paused successfully' };
+  }
+
+  /**
+   * Resume curfew.
+   */
+  static async resumeCurfew(hostelId, user) {
+    const userId = user?.id || user?._id;
+    await CurfewSession.updateMany(
+      { hostelId, status: 'PAUSED' },
+      { $set: { status: 'ACTIVE', notes: 'Curfew resumed by warden' } }
+    );
+    await CurfewConfiguration.updateMany(
+      { hostelId, isActive: true },
+      { $set: { status: 'active' } }
+    );
+    emitToRole('warden', hostelId, 'curfew:resumed', { hostelId, resumedBy: userId, timestamp: new Date() });
+    emitToRole('owner', hostelId, 'curfew:resumed', { hostelId, resumedBy: userId, timestamp: new Date() });
+    return { success: true, message: 'Curfew resumed successfully' };
+  }
+
+  /**
    * Fetch eligible students for curfew monitoring.
    * Criteria:
    * - Active student assigned to this hostel
@@ -1103,14 +1317,24 @@ class CurfewAutomationService {
     if (!hostel) throw new Error(`Hostel ${hostelId} not found`);
 
     const tz = hostel.timezone || 'Asia/Kolkata';
-    const activeSession = await CurfewSession.findOne({
+    const now = new Date();
+
+    let activeSession = await CurfewSession.findOne({
       hostelId,
       status: 'ACTIVE',
-    }).sort({ actualStartAt: -1 }).lean();
+    }).sort({ actualStartAt: -1 });
+
+    // Auto-transition expired active session to COMPLETED
+    if (activeSession && activeSession.scheduledEndAt && now > new Date(activeSession.scheduledEndAt)) {
+      activeSession.status = 'COMPLETED';
+      activeSession.actualEndAt = activeSession.scheduledEndAt || now;
+      await activeSession.save();
+      activeSession = null; // No longer actively in progress
+    }
 
     const scheduledSession = !activeSession ? await CurfewSession.findOne({
       hostelId,
-      status: 'SCHEDULED',
+      status: { $in: ['SCHEDULED', 'PAUSED'] },
     }).sort({ scheduledStartAt: 1 }).lean() : null;
 
     const configuration = await CurfewConfiguration.findOne({
@@ -1118,7 +1342,7 @@ class CurfewAutomationService {
       isActive: true,
     }).sort({ createdAt: -1 }).lean();
 
-    const currentSession = activeSession || scheduledSession;
+    const currentSession = activeSession ? (activeSession.toObject ? activeSession.toObject() : activeSession) : scheduledSession;
 
     let students = [];
     if (activeSession) {
@@ -1130,18 +1354,20 @@ class CurfewAutomationService {
         .lean();
     }
 
-    const now = new Date();
     let remainingSeconds = 0;
     if (activeSession?.scheduledEndAt) {
       remainingSeconds = Math.max(0, Math.floor((new Date(activeSession.scheduledEndAt).getTime() - now.getTime()) / 1000));
     }
+
+    const lifecycleState = this.computeLifecycleState(currentSession, configuration, now);
 
     return {
       hostelId,
       hostelName: hostel.name,
       hostelAddress: hostel.address,
       timezone: tz,
-      status: activeSession ? 'ACTIVE' : scheduledSession ? 'SCHEDULED' : 'INACTIVE',
+      status: activeSession ? 'ACTIVE' : scheduledSession ? scheduledSession.status : (configuration?.isActive ? 'SCHEDULED' : 'INACTIVE'),
+      lifecycleState,
       session: currentSession,
       configuration,
       remainingSeconds,

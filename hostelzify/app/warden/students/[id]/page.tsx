@@ -33,6 +33,10 @@ import {
   Sparkles,
   ExternalLink,
   Info,
+  Edit3,
+  UserCheck,
+  X,
+  Save,
 } from 'lucide-react';
 
 interface StudentDetailsData {
@@ -209,6 +213,48 @@ export default function WardenStudentDetailPage() {
     'overview' | 'attendance' | 'leaves' | 'complaints' | 'discipline' | 'visitors' | 'gate'
   >('overview');
 
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [availableRooms, setAvailableRooms] = useState<any[]>([]);
+
+  // 1. Edit Info Modal
+  const [editModal, setEditModal] = useState({
+    open: false,
+    phone: '',
+    course: '',
+    year: '',
+    parentName: '',
+    parentPhone: '',
+    parentEmail: '',
+    emergencyName: '',
+    emergencyPhone: '',
+    emergencyRelation: '',
+    street: '',
+    city: '',
+    state: '',
+    pincode: '',
+  });
+
+  // 2. Change Status Modal
+  const [statusModal, setStatusModal] = useState({
+    open: false,
+    status: 'active',
+    remarks: '',
+  });
+
+  // 3. Assign / Transfer Room Modal
+  const [roomModal, setRoomModal] = useState({
+    open: false,
+    targetRoomId: '',
+    reason: '',
+  });
+
+  // 4. Checkout Modal
+  const [checkoutModal, setCheckoutModal] = useState({
+    open: false,
+    reason: '',
+    checkoutDate: new Date().toISOString().split('T')[0],
+  });
+
   const fetchDetails = useCallback(
     async (isRefresh = false) => {
       if (!studentId) return;
@@ -236,6 +282,137 @@ export default function WardenStudentDetailPage() {
   useEffect(() => {
     fetchDetails();
   }, [fetchDetails]);
+
+  const openEditModal = () => {
+    if (!data?.student) return;
+    const s = data.student;
+    setEditModal({
+      open: true,
+      phone: s.phone || '',
+      course: s.course || '',
+      year: s.year ? String(s.year) : '',
+      parentName: s.parentContact?.name || '',
+      parentPhone: s.parentContact?.phone || '',
+      parentEmail: s.parentContact?.email || '',
+      emergencyName: s.emergencyContact?.name || '',
+      emergencyPhone: s.emergencyContact?.phone || '',
+      emergencyRelation: s.emergencyContact?.relation || '',
+      street: s.address?.street || '',
+      city: s.address?.city || '',
+      state: s.address?.state || '',
+      pincode: s.address?.pincode || '',
+    });
+  };
+
+  const openRoomModal = async () => {
+    try {
+      const res = await api.getWardenRooms();
+      if (res?.data?.rooms) {
+        setAvailableRooms(res.data.rooms.filter((r: any) => r.status === 'available' || r.currentOccupancy < r.capacity));
+      }
+    } catch (_) {}
+    setRoomModal({ open: true, targetRoomId: '', reason: '' });
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionLoading('edit');
+    try {
+      await api.updateWardenStudentInfo(studentId, {
+        phone: editModal.phone,
+        course: editModal.course,
+        year: editModal.year,
+        parentContact: {
+          name: editModal.parentName,
+          phone: editModal.parentPhone,
+          email: editModal.parentEmail,
+        },
+        emergencyContact: {
+          name: editModal.emergencyName,
+          phone: editModal.emergencyPhone,
+          relation: editModal.emergencyRelation,
+        },
+        address: {
+          street: editModal.street,
+          city: editModal.city,
+          state: editModal.state,
+          pincode: editModal.pincode,
+        },
+      });
+      toast.success('Student information updated successfully');
+      setEditModal((prev) => ({ ...prev, open: false }));
+      fetchDetails(true);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update student details');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleStatusSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionLoading('status');
+    try {
+      await api.updateWardenStudentStatus(studentId, statusModal.status, statusModal.remarks);
+      toast.success('Student status updated');
+      setStatusModal({ open: false, status: 'active', remarks: '' });
+      fetchDetails(true);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update status');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRoomSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!roomModal.targetRoomId) {
+      toast.error('Please select a destination room');
+      return;
+    }
+    setActionLoading('room');
+    try {
+      if (data?.student?.roomId?._id) {
+        await api.transferWardenBed({
+          studentId,
+          fromRoomId: data.student.roomId._id,
+          toRoomId: roomModal.targetRoomId,
+          reason: roomModal.reason,
+        });
+        toast.success('Student room transferred successfully');
+      } else {
+        await api.assignWardenBed(roomModal.targetRoomId, {
+          studentId,
+          reason: roomModal.reason,
+        });
+        toast.success('Student assigned to room successfully');
+      }
+      setRoomModal({ open: false, targetRoomId: '', reason: '' });
+      fetchDetails(true);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to allocate/transfer room');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleCheckoutSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionLoading('checkout');
+    try {
+      await api.checkoutWardenStudent(studentId, {
+        reason: checkoutModal.reason,
+        checkoutDate: checkoutModal.checkoutDate,
+      });
+      toast.success('Student checkout completed and bed vacated');
+      setCheckoutModal({ open: false, reason: '', checkoutDate: new Date().toISOString().split('T')[0] });
+      fetchDetails(true);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to checkout student');
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -394,6 +571,46 @@ export default function WardenStudentDetailPage() {
                   {student.blockId?.name ? ` • Block ${student.blockId.name}` : ''}
                 </p>
               </div>
+            </div>
+          </div>
+
+          {/* Quick Operational Actions Bar */}
+          <div className="mt-5 pt-4 border-t border-gray-100 flex items-center justify-between gap-2 overflow-x-auto flex-wrap sm:flex-nowrap">
+            <span className="text-xs font-bold uppercase tracking-wider text-gray-400 shrink-0">
+              Warden Actions:
+            </span>
+            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+              <button
+                onClick={openEditModal}
+                className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200/60 transition-colors flex items-center gap-1.5 shrink-0"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                Edit Information
+              </button>
+
+              <button
+                onClick={() => setStatusModal({ open: true, status: student.status || 'active', remarks: '' })}
+                className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200/60 transition-colors flex items-center gap-1.5 shrink-0"
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+                Change Status
+              </button>
+
+              <button
+                onClick={openRoomModal}
+                className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-sky-50 text-sky-700 hover:bg-sky-100 border border-sky-200/60 transition-colors flex items-center gap-1.5 shrink-0"
+              >
+                <ArrowRightLeft className="w-3.5 h-3.5" />
+                {student.roomId ? 'Transfer Room' : 'Assign Room'}
+              </button>
+
+              <button
+                onClick={() => setCheckoutModal({ open: true, reason: '', checkoutDate: new Date().toISOString().split('T')[0] })}
+                className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200/60 transition-colors flex items-center gap-1.5 shrink-0"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                Checkout Student
+              </button>
             </div>
           </div>
         </div>
@@ -1201,6 +1418,328 @@ export default function WardenStudentDetailPage() {
           )}
         </div>
       )}
+
+      {/* ── MODAL 1: EDIT PERMITTED STUDENT INFORMATION ── */}
+      {editModal.open && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-gray-200 my-8">
+            <div className="flex items-center justify-between pb-4 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <Edit3 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-gray-900">Update Student Information</h3>
+                  <p className="text-xs text-gray-500">Edit permitted personal, guardian, and emergency records</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditModal({ ...editModal, open: false })}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditSubmit} className="space-y-4 mt-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-gray-700 mb-1">Student Phone</label>
+                  <input
+                    type="tel"
+                    value={editModal.phone}
+                    onChange={(e) => setEditModal({ ...editModal, phone: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-gray-700 mb-1">Course & Year</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Course"
+                      value={editModal.course}
+                      onChange={(e) => setEditModal({ ...editModal, course: e.target.value })}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Year"
+                      value={editModal.year}
+                      onChange={(e) => setEditModal({ ...editModal, year: e.target.value })}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Guardian Info */}
+              <div className="p-3 bg-gray-50 rounded-xl border border-gray-100 space-y-2">
+                <p className="font-bold text-gray-800">Guardian / Parent Contact</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Guardian Name"
+                    value={editModal.parentName}
+                    onChange={(e) => setEditModal({ ...editModal, parentName: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <input
+                    type="tel"
+                    placeholder="Guardian Phone"
+                    value={editModal.parentPhone}
+                    onChange={(e) => setEditModal({ ...editModal, parentPhone: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Emergency Contact */}
+              <div className="p-3 bg-rose-50/50 rounded-xl border border-rose-100 space-y-2">
+                <p className="font-bold text-rose-900">Emergency Contact</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Emergency Contact Name"
+                    value={editModal.emergencyName}
+                    onChange={(e) => setEditModal({ ...editModal, emergencyName: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <input
+                    type="tel"
+                    placeholder="Emergency Phone"
+                    value={editModal.emergencyPhone}
+                    onChange={(e) => setEditModal({ ...editModal, emergencyPhone: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Relation"
+                    value={editModal.emergencyRelation}
+                    onChange={(e) => setEditModal({ ...editModal, emergencyRelation: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Address */}
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  placeholder="Street Address"
+                  value={editModal.street}
+                  onChange={(e) => setEditModal({ ...editModal, street: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <input
+                  type="text"
+                  placeholder="City"
+                  value={editModal.city}
+                  onChange={(e) => setEditModal({ ...editModal, city: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setEditModal({ ...editModal, open: false })}
+                  className="px-4 py-2 font-semibold text-gray-600 hover:bg-gray-100 rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'edit'}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs transition-colors disabled:opacity-50"
+                >
+                  {actionLoading === 'edit' ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 2: CHANGE STUDENT STATUS ── */}
+      {statusModal.open && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-200">
+            <h3 className="text-base font-bold text-gray-900">Change Student Status</h3>
+            <p className="text-xs text-gray-500 mt-1">
+              Update administrative status for <b>{student.name}</b>
+            </p>
+
+            <form onSubmit={handleStatusSubmit} className="mt-4 space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Select New Status *</label>
+                <select
+                  value={statusModal.status}
+                  onChange={(e) => setStatusModal({ ...statusModal, status: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="active">Active (Resident Inside/Outside on schedule)</option>
+                  <option value="on-leave">On Leave (Approved Outpass)</option>
+                  <option value="suspended">Suspended (Disciplinary Restriction)</option>
+                  <option value="exited">Exited / Checked Out</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Administrative Remarks / Reason</label>
+                <textarea
+                  rows={3}
+                  placeholder="e.g. Disciplinary suspension approved by Owner / Medical leave"
+                  value={statusModal.remarks}
+                  onChange={(e) => setStatusModal({ ...statusModal, remarks: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setStatusModal({ ...statusModal, open: false })}
+                  className="px-4 py-2 font-semibold text-gray-600 hover:bg-gray-100 rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'status'}
+                  className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-xs transition-colors disabled:opacity-50"
+                >
+                  {actionLoading === 'status' ? 'Updating...' : 'Update Status'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 3: ASSIGN / TRANSFER ROOM ── */}
+      {roomModal.open && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-gray-200">
+            <h3 className="text-base font-bold text-gray-900">
+              {student.roomId ? 'Transfer Room / Bed' : 'Assign Room / Bed'}
+            </h3>
+            <p className="text-xs text-gray-500 mt-1">
+              Current room:{' '}
+              <b>{student.roomId ? `Room ${student.roomId.roomNumber} (Floor ${student.roomId.floorNumber})` : 'Unassigned'}</b>
+            </p>
+
+            <form onSubmit={handleRoomSubmit} className="mt-4 space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Destination Room *</label>
+                <select
+                  required
+                  value={roomModal.targetRoomId}
+                  onChange={(e) => setRoomModal({ ...roomModal, targetRoomId: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">-- Select Available Room --</option>
+                  {availableRooms
+                    .filter((r) => String(r._id) !== String(student.roomId?._id))
+                    .map((r) => (
+                      <option key={r._id} value={r._id}>
+                        Room {r.roomNumber} (Floor {r.floorNumber}) • {r.capacity - r.currentOccupancy} bed(s) available
+                        {r.category ? ` • ${r.category}` : ''}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Reason for Transfer / Allocation</label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Student requested quiet room / Floor maintenance / Roommate request"
+                  value={roomModal.reason}
+                  onChange={(e) => setRoomModal({ ...roomModal, reason: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setRoomModal({ ...roomModal, open: false })}
+                  className="px-4 py-2 font-semibold text-gray-600 hover:bg-gray-100 rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'room'}
+                  className="px-5 py-2 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl shadow-xs transition-colors disabled:opacity-50"
+                >
+                  {actionLoading === 'room' ? 'Allocating...' : 'Confirm Allocation'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 4: CHECKOUT STUDENT ── */}
+      {checkoutModal.open && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-rose-200">
+            <div className="flex items-center gap-2 text-rose-600 mb-2">
+              <LogOut className="w-5 h-5" />
+              <h3 className="text-base font-bold text-gray-900">Checkout Student</h3>
+            </div>
+            <p className="text-xs text-gray-600">
+              Checking out <b>{student.name}</b> will vacate their bed in{' '}
+              <b>{student.roomId ? `Room ${student.roomId.roomNumber}` : 'the hostel'}</b>, record a formal checkout
+              event, and set their status to <b>Exited</b>.
+            </p>
+
+            <form onSubmit={handleCheckoutSubmit} className="mt-4 space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Effective Checkout Date</label>
+                <input
+                  type="date"
+                  required
+                  value={checkoutModal.checkoutDate}
+                  onChange={(e) => setCheckoutModal({ ...checkoutModal, checkoutDate: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Checkout Reason / Clearance Notes</label>
+                <textarea
+                  rows={3}
+                  placeholder="e.g. End of academic semester, keys surrendered, no dues pending"
+                  value={checkoutModal.reason}
+                  onChange={(e) => setCheckoutModal({ ...checkoutModal, reason: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setCheckoutModal({ ...checkoutModal, open: false })}
+                  className="px-4 py-2 font-semibold text-gray-600 hover:bg-gray-100 rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'checkout'}
+                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-xs transition-colors disabled:opacity-50"
+                >
+                  {actionLoading === 'checkout' ? 'Processing Checkout...' : 'Confirm Checkout'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

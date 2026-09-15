@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth, isOwnerUser } from '../../../contexts/AuthContext';
+import { useOwnerHostel } from '../../../contexts/OwnerHostelContext';
 import api from '../../../services/api';
 import { useToast } from '../../../components/Toast';
 import { useConfirmModal } from '../../../components/ConfirmModal';
@@ -55,12 +56,13 @@ export default function StaffPage() {
   const router = useRouter();
   const { showToast } = useToast();
   const { confirm } = useConfirmModal();
+  const { selectedHostel, setSelectedHostel } = useOwnerHostel();
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [hostels, setHostels] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
-  const [hostelFilter, setHostelFilter] = useState<string>('all');
+  const [hostelFilter, setHostelFilter] = useState<string>(selectedHostel || 'all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null);
@@ -71,7 +73,7 @@ export default function StaffPage() {
     phone: '',
     role: 'warden',
     roles: ['warden'] as string[],
-    hostelId: '',
+    hostelId: selectedHostel || '',
     status: 'active' as 'active' | 'on-leave' | 'exited' | 'suspended',
   });
   const [submitting, setSubmitting] = useState(false);
@@ -85,6 +87,13 @@ export default function StaffPage() {
     }
     loadData();
   }, [user, router]);
+
+  useEffect(() => {
+    if (selectedHostel) {
+      setHostelFilter(selectedHostel);
+      setFormData((prev) => ({ ...prev, hostelId: selectedHostel }));
+    }
+  }, [selectedHostel]);
 
   const loadData = async (options?: { silent?: boolean }) => {
     if (!options?.silent) setLoading(true);
@@ -507,10 +516,14 @@ export default function StaffPage() {
             <div className="mt-4">
               <select
                 value={hostelFilter}
-                onChange={(e) => setHostelFilter(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setHostelFilter(val);
+                  if (val && val !== 'all' && val !== 'unassigned') setSelectedHostel(val);
+                }}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
               >
-                <option value="all">All Hostels</option>
+                <option value="all">All Hostels ({hostels.length})</option>
                 <option value="unassigned">Unassigned</option>
                 {hostels.map((hostel) => (
                   <option key={hostel._id || hostel.id} value={hostel._id || hostel.id}>

@@ -87,7 +87,7 @@ export default function SelectRolePage() {
   const [switchingRole, setSwitchingRole] = useState<string | null>(null);
   const [isSwitching] = useState(() => {
     if (typeof window !== 'undefined') {
-      return window.location.search.includes('switch=true');
+      return window.location.search.includes('switch=true') || window.location.search.includes('prompt=true');
     }
     return false;
   });
@@ -115,23 +115,33 @@ export default function SelectRolePage() {
     }
   };
 
+  // Safely extract all roles as a flat array of strings
+  const getUserRoles = (u: any): string[] => {
+    if (!u) return [];
+    return Array.from(
+      new Set([
+        ...(Array.isArray(u.roles) ? u.roles : []),
+        ...(Array.isArray(u.role) ? u.role : (u.role ? [u.role] : [])),
+      ])
+    ).filter(Boolean);
+  };
+
   useEffect(() => {
     if (!user) {
       router.replace('/login');
       return;
     }
 
-    const userRoles = user.roles || (user.role ? [user.role] : []);
+    const userRoles = getUserRoles(user);
     const hasMultipleRoles = userRoles.length > 1;
 
-    if (!hasMultipleRoles && user.role && !isSwitching) {
-      const r = typeof user.role === 'string' ? user.role : userRoles[0];
-      const roleStr = typeof r === 'string' ? r : (Array.isArray(r) ? r[0] : '') ?? '';
-      navigateToRole(roleStr);
+    if (!hasMultipleRoles && userRoles.length > 0 && !isSwitching) {
+      navigateToRole(userRoles[0]);
       return;
     }
 
-    if (user.currentRole && userRoles.includes(user.currentRole) && !switchingRole && !isSwitching) {
+    // Only auto-navigate if not explicitly switching/prompted
+    if (!isSwitching && user.currentRole && userRoles.includes(user.currentRole) && !switchingRole) {
       navigateToRole(user.currentRole);
       return;
     }
@@ -154,7 +164,7 @@ export default function SelectRolePage() {
     }
   };
 
-  const userRoles = user?.roles || (user?.role ? [user.role] : []);
+  const userRoles = getUserRoles(user);
   const hasMultipleRoles = userRoles.length > 1;
   const defaultRole = (user?.currentRole && userRoles.includes(user.currentRole)) ? user.currentRole : (userRoles[0] || '');
   const activeSelectedRole = selectedRole || (typeof defaultRole === 'string' ? defaultRole : '');

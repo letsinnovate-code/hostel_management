@@ -98,7 +98,38 @@ exports.createAnnouncement = async (req, res) => {
       hostelId: targetHostelId,
     });
 
-    res.status(201).json({ success: true, data: notification, message: 'Announcement created successfully' });
+    // Real-time broadcast via alert module socket manager
+    try {
+      const { emitToHostel, emitToRole } = require('../../modules/alert/socket/socketManager');
+      const payload = {
+        _id: notification._id,
+        title,
+        message,
+        type,
+        priority,
+        targetAudience,
+        createdAt: notification.createdAt,
+        createdBy: { _id: req.user.id, name: req.user.name, role: req.user.role },
+      };
+      if (targetAudience === 'students') {
+        emitToRole('student', targetHostelId, 'announcement:new', payload);
+      } else if (targetAudience === 'staff') {
+        emitToRole('warden', targetHostelId, 'announcement:new', payload);
+        emitToRole('cleaner', targetHostelId, 'announcement:new', payload);
+        emitToRole('security', targetHostelId, 'announcement:new', payload);
+      } else {
+        emitToHostel(targetHostelId, 'announcement:new', payload);
+      }
+    } catch (socketErr) {
+      console.warn('[Announcements] Socket broadcast warning:', socketErr.message);
+    }
+
+    res.status(201).json({
+      success: true,
+      data: notification,
+      count: recipients.length,
+      message: `Announcement broadcasted successfully to ${recipients.length} recipients`,
+    });
   } catch (error) {
     return sendErrorResponse(res, error, 'Failed to create announcement');
   }
@@ -444,3 +475,332 @@ exports.getStudentDetails = async (req, res) => {
     return sendErrorResponse(res, error, 'Failed to fetch student details');
   }
 };
+
+// Update Permitted Student Information (Contact, Parent, Emergency, Address, Academic)
+exports.updateStudentInfo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(403).json({ success: false, message: 'No hostel assigned to your profile' });
+    }
+
+    const student = await User.findOne({ _id: id, role: 'student', hostelId: targetHostelId });
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found in your assigned hostel' });
+    }
+
+    const { phone, parentContact, emergencyContact, address, course, year } = req.body;
+
+    if (phone !== undefined) student.phone = phone;
+    if (course !== undefined) student.course = course;
+    if (year !== undefined) student.year = year;
+
+    if (parentContact && typeof parentContact === 'object') {
+      student.parentContact = {
+        name: parentContact.name !== undefined ? parentContact.name : student.parentContact?.name,
+        phone: parentContact.phone !== undefined ? parentContact.phone : student.parentContact?.phone,
+        email: parentContact.email !== undefined ? parentContact.email : student.parentContact?.email,
+      };
+    }
+
+    if (emergencyContact && typeof emergencyContact === 'object') {
+      student.emergencyContact = {
+        name: emergencyContact.name !== undefined ? emergencyContact.name : student.emergencyContact?.name,
+        phone: emergencyContact.phone !== undefined ? emergencyContact.phone : student.emergencyContact?.phone,
+        relation: emergencyContact.relation !== undefined ? emergencyContact.relation : student.emergencyContact?.relation,
+      };
+    }
+
+    if (address && typeof address === 'object') {
+      student.address = {
+        street: address.street !== undefined ? address.street : student.address?.street,
+        city: address.city !== undefined ? address.city : student.address?.city,
+        state: address.state !== undefined ? address.state : student.address?.state,
+        pincode: address.pincode !== undefined ? address.pincode : student.address?.pincode,
+        country: address.country !== undefined ? address.country : student.address?.country,
+      };
+    }
+
+    await student.save();
+
+    res.status(200).json({
+      success: true,
+      data: student,
+      message: 'Student information updated successfully',
+    });
+  } catch (error) {
+    return sendErrorResponse(res, error, 'Failed to update student information');
+  }
+};
+
+// Update Student Status (active, on-leave, suspended, exited)
+exports.updateStudentStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, remarks } = req.body;
+    const allowedStatuses = ['active', 'on-leave', 'suspended', 'exited'];
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status. Allowed values: ${allowedStatuses.join(', ')}`,
+      });
+    }
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(403).json({ success: false, message: 'No hostel assigned to your profile' });
+    }
+
+    const student = await User.findOne({ _id: id, role: 'student', hostelId: targetHostelId });
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found in your assigned hostel' });
+    }
+
+    const previousStatus = student.status;
+    student.status = status;
+    if (remarks) {
+      student.statusRemarks = remarks;
+    }
+    await student.save();
+
+    res.status(200).json({
+      success: true,
+      data: student,
+      message: `Student status updated from ${previousStatus || 'active'} to ${status}`,
+    });
+  } catch (error) {
+    return sendErrorResponse(res, error, 'Failed to update student status');
+  }
+};
+
+// Checkout Student (vacates bed, updates room occupancy, sets status to exited)
+exports.checkoutStudent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason, checkoutDate = new Date() } = req.body;
+
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(403).json({ success: false, message: 'No hostel assigned to your profile' });
+    }
+
+    const student = await User.findOne({ _id: id, role: 'student', hostelId: targetHostelId });
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found in your assigned hostel' });
+    }
+
+    const previousRoomId = student.roomId;
+
+    if (previousRoomId) {
+      const room = await Room.findById(previousRoomId);
+      if (room) {
+        // Remove student from room
+        room.students = (room.students || []).filter(sId => String(sId) !== String(id));
+        room.currentOccupancy = Math.max(0, room.students.length);
+        if (room.status === 'occupied' && room.currentOccupancy < room.capacity) {
+          room.status = 'available';
+        }
+        await room.save();
+
+        // Record history
+        const RoomAllocationHistory = require('../../models/RoomAllocationHistory');
+        await RoomAllocationHistory.create({
+          studentId: id,
+          fromRoomId: previousRoomId,
+          action: 'vacate',
+          reason: reason || 'Student Checkout',
+          performedBy: req.user.id,
+          hostelId: targetHostelId,
+          timestamp: new Date(checkoutDate),
+        });
+      }
+      student.roomId = null;
+    }
+
+    student.status = 'exited';
+    student.checkoutDate = new Date(checkoutDate);
+    student.checkoutReason = reason || 'Completed stay';
+    await student.save();
+
+    res.status(200).json({
+      success: true,
+      data: student,
+      message: 'Student checked out successfully and room bed vacated',
+    });
+  } catch (error) {
+    return sendErrorResponse(res, error, 'Failed to checkout student');
+  }
+};
+
+// Get Sent Announcements for Warden's Hostel
+exports.getWardenAnnouncements = async (req, res) => {
+  try {
+    const targetHostelId = await resolveWardenHostelId(req);
+    if (!targetHostelId) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
+    }
+
+    const { page, limit, skip, isExplicit } = parsePagination(req.query, { defaultLimit: 20, maxLimit: 100 });
+    const query = { hostelId: targetHostelId };
+
+    const [announcements, total] = await Promise.all([
+      Notification.find(query)
+        .populate('createdBy', 'name role')
+        .sort({ createdAt: -1 })
+        .skip(isExplicit ? skip : 0)
+        .limit(isExplicit ? limit : 50)
+        .lean(),
+      Notification.countDocuments(query),
+    ]);
+
+    const responsePayload = {
+      success: true,
+      count: announcements.length,
+      data: announcements,
+    };
+    if (isExplicit) {
+      responsePayload.pagination = buildPaginationMetadata(total, page, limit);
+    }
+    res.status(200).json(responsePayload);
+  } catch (error) {
+    return sendErrorResponse(res, error, 'Failed to fetch announcements');
+  }
+};
+
+// @desc    Reset student device binding
+// @route   POST /api/warden/students/:studentId/reset-device
+// @access  Private (Warden)
+exports.resetStudentDevice = async (req, res) => {
+  try {
+    const studentId = req.params.studentId || req.params.id;
+    const targetHostelId = await resolveWardenHostelId(req);
+    const user = await User.findOne({ _id: studentId, hostelId: targetHostelId });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Student not found in your hostel' });
+    }
+    user.deviceId = null;
+    user.deviceBoundAt = null;
+    await user.save();
+    return res.status(200).json({ success: true, message: 'Device reset successfully' });
+  } catch (error) {
+    return sendErrorResponse(res, error, 'Failed to reset device');
+  }
+};
+
+// @desc    Direct student registration by Warden with room and bed assignment
+// @route   POST /api/warden/students
+// @access  Private (Warden)
+exports.registerStudentByWarden = async (req, res) => {
+  try {
+    const {
+      name,
+      email,
+      phone,
+      password,
+      gender = 'Male',
+      course = '',
+      year = '1',
+      dateOfBirth,
+      roomId,
+      bedNumber = 'Bed 1',
+      parentContact,
+      emergencyContact,
+      address,
+      hostelId,
+    } = req.body;
+
+    if (!name?.trim() || !email?.trim() || !phone?.trim() || !password?.trim()) {
+      return res.status(400).json({ success: false, message: 'Name, email, phone, and password are required' });
+    }
+
+    const targetHostelId = hostelId || (await resolveWardenHostelId(req));
+    if (!targetHostelId) {
+      return res.status(400).json({ success: false, message: 'Hostel could not be identified for registration' });
+    }
+
+    // Check duplicate
+    const existing = await User.findOne({
+      $or: [{ email: email.trim().toLowerCase() }, { phone: phone.trim() }],
+    });
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        message: existing.email === email.trim().toLowerCase()
+          ? 'A user with this email address already exists'
+          : 'A user with this phone number already exists',
+      });
+    }
+
+    const bcrypt = require('bcryptjs');
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password.trim(), salt);
+    const generatedId = `STU${Date.now().toString().slice(-6)}`;
+
+    const newStudent = await User.create({
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      phone: phone.trim(),
+      password: hashedPassword,
+      role: ['student'],
+      currentRole: 'student',
+      hostelId: targetHostelId,
+      roomId: roomId || null,
+      bedNumber: bedNumber || 'Bed 1',
+      studentId: req.body.studentId?.trim() || generatedId,
+      gender: gender ? gender.toLowerCase() : 'male',
+      course,
+      year: String(year),
+      dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
+      parentContact: parentContact || {},
+      emergencyContact: emergencyContact || {},
+      address: address || {},
+      status: 'active',
+      isApproved: true,
+      onboardingStatus: 'completed',
+    });
+
+    // If roomId assigned, update room occupancy and allocation history
+    if (roomId) {
+      const room = await Room.findById(roomId);
+      if (room) {
+        if (!room.students) room.students = [];
+        if (!room.students.some((sId) => String(sId) === String(newStudent._id))) {
+          room.students.push(newStudent._id);
+        }
+        room.currentOccupancy = room.students.length;
+        if (room.currentOccupancy >= room.capacity) {
+          room.status = 'occupied';
+        } else {
+          room.status = 'available';
+        }
+        await room.save();
+
+        const RoomAllocationHistory = require('../../models/RoomAllocationHistory');
+        await RoomAllocationHistory.create({
+          studentId: newStudent._id,
+          toRoomId: roomId,
+          action: 'allocate',
+          reason: 'Initial Warden Onboarding Registration',
+          performedBy: req.user.id,
+          hostelId: targetHostelId,
+          timestamp: new Date(),
+        }).catch((err) => console.warn('[Onboarding] Error creating room history:', err.message));
+      }
+    }
+
+    // Return created student without password
+    const studentObj = newStudent.toObject ? newStudent.toObject() : newStudent;
+    delete studentObj.password;
+
+    res.status(201).json({
+      success: true,
+      data: studentObj,
+      message: 'Student registered successfully with room and bed allocation',
+    });
+  } catch (error) {
+    return sendErrorResponse(res, error, 'Failed to register student');
+  }
+};
+
+

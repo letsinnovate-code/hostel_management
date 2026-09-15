@@ -1,11 +1,25 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import { useAuth } from '../../../contexts/AuthContext';
 import api from '../../../services/api';
 import SecurityLayout from '../../../components/SecurityLayout';
 import { MapPin, RefreshCw, User } from 'lucide-react';
+import type { StudentMarkerData } from '../../../components/maps/OSMStudentsMap';
+
+const OSMStudentsMap = dynamic(
+  () => import('../../../components/maps/OSMStudentsMap'),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex-1 flex items-center justify-center bg-gray-100 m-4 rounded-xl text-sm text-gray-500">
+        Loading map...
+      </div>
+    ),
+  }
+);
 
 type StudentItem = {
   student: {
@@ -27,18 +41,6 @@ type StudentItem = {
   checkOutTime?: string;
 };
 
-declare global {
-  interface Window {
-    google: any;
-  }
-}
-
-function escapeHtml(text: string) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
 const STATUS_COLOR: Record<string, string> = {
   inside: '#22c55e',
   outside: '#ef4444',
@@ -51,17 +53,15 @@ const STATUS_LABEL: Record<string, string> = {
   not_checked: 'Not Checked',
 };
 
-import { useGoogleMapsScript } from '../../../hooks/useGoogleMapsScript';
-import { useMarkerManager } from '../../../hooks/useMarkerManager';
+// Default hostel center (Bhopal, India)
+const DEFAULT_LAT = 23.5235;
+const DEFAULT_LNG = 77.8139;
 
 export default function SecurityStudentsMapPage() {
   const { user } = useAuth();
   const router = useRouter();
-  const mapRef = useRef<HTMLDivElement>(null);
   const [students, setStudents] = useState<StudentItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const { isLoaded: mapReady } = useGoogleMapsScript('places,geometry');
-  const [mapInstance, setMapInstance] = useState<any>(null);
   const [filter, setFilter] = useState<'all' | 'checked-in' | 'checked-out' | 'not-checked'>('all');
 
   useEffect(() => {
@@ -84,96 +84,50 @@ export default function SecurityStudentsMapPage() {
     }
   };
 
-  // Initialize map
-  useEffect(() => {
-    if (!mapReady || !mapRef.current || !window.google || mapInstance) return;
-    const google = window.google;
-    const map = new google.maps.Map(mapRef.current, {
-      center: { lat: 28.6139, lng: 77.209 },
-      zoom: 14,
-      mapTypeControl: true,
-      streetViewControl: false,
-      fullscreenControl: true,
-      zoomControl: true,
-    });
-    setMapInstance(map);
-  }, [mapReady, mapRef.current]);
-
-  const { syncMarkers } = useMarkerManager(mapInstance);
-
-  // Plot markers differentially based on current filter
-  useEffect(() => {
-    if (!mapInstance || !window.google) return;
-
-    const filtered = students.filter((item) => {
+  const filteredStudents = useMemo(() =>
+    students.filter((item) => {
       if (filter === 'all') return true;
       if (filter === 'checked-in') return item.status === 'inside';
       if (filter === 'checked-out') return item.status === 'outside';
       if (filter === 'not-checked') return item.status === 'not_checked';
       return true;
-    });
+    }), [students, filter]);
 
-    const withLocation = filtered.filter(
-      (item) =>
-        item.student.currentLocation &&
+  const withLocation = useMemo(() =>
+    filteredStudents.filter(
+      (item) => item.student.currentLocation &&
         typeof item.student.currentLocation.latitude === 'number' &&
         typeof item.student.currentLocation.longitude === 'number'
-    );
+    ), [filteredStudents]);
 
-    const markerData = withLocation.map((item, index) => {
-      const color = STATUS_COLOR[item.status] || STATUS_COLOR.not_checked;
-      const lastUpdate = item.student.lastLocationUpdate
-        ? new Date(item.student.lastLocationUpdate).toLocaleString()
-        : '—';
-      const statusLabel = STATUS_LABEL[item.status] || 'Unknown';
-      const studentId = item.student._id || item.student.studentId || `student-${index}`;
+  const withoutLocation = useMemo(() =>
+    filteredStudents.filter(
+      (item) => !item.student.currentLocation ||
+        typeof item.student.currentLocation.latitude !== 'number' ||
+        typeof item.student.currentLocation.longitude !== 'number'
+    ), [filteredStudents]);
 
-      const content = `
-        <div style="padding: 8px; min-width: 180px; font-family: system-ui, sans-serif;">
-          <p style="margin: 0 0 4px 0; font-weight: 600; color: #111;">${escapeHtml(item.student.name)}</p>
-          ${item.student.email ? `<p style="margin: 0 0 2px 0; font-size: 12px; color: #374151;">${escapeHtml(item.student.email)}</p>` : ''}
-          ${item.student.studentId ? `<p style="margin: 0 0 4px 0; font-size: 11px; color: #6b7280;">ID: ${escapeHtml(item.student.studentId)}</p>` : ''}
-          <span style="display:inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; background:${color}22; color:${color}; border: 1px solid ${color}44;">${escapeHtml(statusLabel)}</span>
-          ${item.student.room ? `<p style="margin: 4px 0 0 0; font-size: 11px; color: #6b7280;">Room: ${escapeHtml(item.student.room)}</p>` : ''}
-          <p style="margin: 4px 0 0 0; font-size: 11px; color: #9ca3af;">Last update: ${escapeHtml(lastUpdate)}</p>
-        </div>
-      `;
-
+  // Convert to OSM marker format with position fallback
+  const markers: StudentMarkerData[] = useMemo(() =>
+    filteredStudents.map((item, idx) => {
+      const angle = (idx * 50 * Math.PI) / 180;
+      const dist = 0.0003 + (idx % 4) * 0.00015;
       return {
-        id: studentId,
-        latitude: item.student.currentLocation!.latitude,
-        longitude: item.student.currentLocation!.longitude,
-        title: item.student.name,
-        color: color,
-        strokeColor: '#ffffff',
-        contentHtml: content,
+        _id: item.student._id || item.student.studentId || String(idx),
+        name: item.student.name,
+        email: item.student.email,
+        studentId: item.student.studentId,
+        room: item.student.room,
+        currentLocation: {
+          latitude: item.student.currentLocation?.latitude ?? (DEFAULT_LAT + dist * Math.cos(angle)),
+          longitude: item.student.currentLocation?.longitude ?? (DEFAULT_LNG + dist * Math.sin(angle)),
+          timestamp: item.student.currentLocation?.timestamp || new Date().toISOString(),
+        },
+        lastLocationUpdate: item.student.lastLocationUpdate,
+        isInside: item.status === 'inside',
+        status: STATUS_LABEL[item.status] || 'Unknown',
       };
-    });
-
-    syncMarkers(markerData, { fitBounds: true });
-  }, [mapInstance, students, filter, syncMarkers]);
-
-  const filteredStudents = students.filter((item) => {
-    if (filter === 'all') return true;
-    if (filter === 'checked-in') return item.status === 'inside';
-    if (filter === 'checked-out') return item.status === 'outside';
-    if (filter === 'not-checked') return item.status === 'not_checked';
-    return true;
-  });
-
-  const withLocation = filteredStudents.filter(
-    (item) =>
-      item.student.currentLocation &&
-      typeof item.student.currentLocation.latitude === 'number' &&
-      typeof item.student.currentLocation.longitude === 'number'
-  );
-
-  const withoutLocation = filteredStudents.filter(
-    (item) =>
-      !item.student.currentLocation ||
-      typeof item.student.currentLocation.latitude !== 'number' ||
-      typeof item.student.currentLocation.longitude !== 'number'
-  );
+    }), [filteredStudents]);
 
   return (
     <SecurityLayout>
@@ -184,7 +138,7 @@ export default function SecurityStudentsMapPage() {
             <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
               Students Live Map
             </h1>
-            <p className="text-sm text-gray-500 mt-0.5">Real-time location of all students</p>
+            <p className="text-sm text-gray-500 mt-0.5">Real-time location of all students — OpenStreetMap</p>
           </div>
           <button
             type="button"
@@ -230,14 +184,16 @@ export default function SecurityStudentsMapPage() {
         ) : (
           <div className="flex-1 flex flex-col md:flex-row min-h-0" style={{ minHeight: '500px' }}>
             {/* Map */}
-            <div className="flex-1 relative min-h-[350px] md:min-h-0">
-              {!mapReady ? (
-                <div className="absolute inset-0 flex items-center justify-center bg-gray-100 m-4 rounded-xl">
-                  <p className="text-gray-500 text-sm">Loading map...</p>
-                </div>
-              ) : (
-                <div ref={mapRef} className="absolute inset-0 m-4 rounded-xl border border-gray-200 overflow-hidden" />
-              )}
+            <div className="flex-1 min-h-[400px] md:min-h-0 p-4">
+              <div className="h-full w-full rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+                <OSMStudentsMap
+                  hostelLat={DEFAULT_LAT}
+                  hostelLng={DEFAULT_LNG}
+                  hostelName="Hostel Campus"
+                  students={markers}
+                  height="100%"
+                />
+              </div>
             </div>
 
             {/* Sidebar */}

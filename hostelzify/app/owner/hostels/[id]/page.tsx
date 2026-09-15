@@ -4,8 +4,14 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useAuth } from '../../../../contexts/AuthContext';
 import api from '../../../../services/api';
-import GoogleMap from '../../../../components/GoogleMap';
+import dynamic from 'next/dynamic';
 import { useToast } from '../../../../components/Toast';
+
+const OSMLocationView = dynamic(
+  () => import('../../../../components/maps/OSMLocationView'),
+  { ssr: false, loading: () => <div className="w-full h-64 bg-gray-100 rounded-xl flex items-center justify-center text-xs text-gray-500">Loading map...</div> }
+);
+
 import ConfirmModal, { useConfirmModal } from '../../../../components/ConfirmModal';
 import Link from 'next/link';
 import { 
@@ -738,12 +744,14 @@ export default function HostelDetailPage() {
             <div className="bg-white rounded-lg shadow-sm p-4 md:p-6 mb-6">
               <h2 className="text-lg md:text-xl font-semibold text-gray-900 mb-4">Location</h2>
               <div className="w-full h-64 sm:h-80 md:h-96 rounded-lg overflow-hidden">
-                <GoogleMap
+                <OSMLocationView
                   latitude={hostel.address.coordinates.latitude}
                   longitude={hostel.address.coordinates.longitude}
+                  label={hostel.name}
                   height="100%"
                   zoom={15}
                 />
+
               </div>
             </div>
           )}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
 
@@ -66,9 +66,14 @@ export function useToast() {
     };
   }, []);
 
-  const showToast = (message: string, type: ToastType = 'info', duration?: number) => {
-    return toastManager.show(message, type, duration);
-  };
+  // useCallback gives showToast a stable reference so it is safe to include
+  // in useEffect dependency arrays without causing infinite re-render loops.
+  const showToast = useCallback(
+    (message: string, type: ToastType = 'info', duration?: number) => {
+      return toastManager.show(message, type, duration);
+    },
+    [] // toastManager is a module-level singleton — never changes
+  );
 
   return { toasts, showToast };
 }

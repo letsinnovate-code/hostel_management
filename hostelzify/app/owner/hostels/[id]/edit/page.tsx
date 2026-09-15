@@ -7,11 +7,13 @@ import api from '../../../../../services/api';
 import AddressInput from '../../../../../components/AddressInput';
 import { useToast } from '../../../../../components/Toast';
 import ConfirmModal, { useConfirmModal } from '../../../../../components/ConfirmModal';
+import { useOwnerHostelOptional } from '../../../../../contexts/OwnerHostelContext';
 import Link from 'next/link';
 import { Trash2 } from 'lucide-react';
 
 export default function EditHostelPage() {
   const { user } = useAuth();
+  const ownerHostelContext = useOwnerHostelOptional();
   const router = useRouter();
   const params = useParams();
   const id = params?.id as string;
@@ -339,6 +341,7 @@ export default function EditHostelPage() {
       };
 
       await api.updateHostel(id, submitData);
+      await ownerHostelContext?.refetchHostels();
       showToast('Hostel updated successfully', 'success');
       router.push(`/owner/hostels/${id}`);
     } catch (error: any) {

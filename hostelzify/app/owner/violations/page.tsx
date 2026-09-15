@@ -6,7 +6,8 @@ import { useAuth, isOwnerUser } from '../../../contexts/AuthContext';
 import { useOwnerHostel } from '../../../contexts/OwnerHostelContext';
 import api from '../../../services/api';
 import Link from 'next/link';
-import { AlertCircle, User, ChevronRight, ChevronLeft, Calendar } from 'lucide-react';
+import { useMemo } from 'react';
+import { AlertCircle, User, ChevronRight, ChevronLeft, Calendar, Search, Filter } from 'lucide-react';
 
 function toDateString(d: Date) {
   return d.toISOString().slice(0, 10);
@@ -93,6 +94,8 @@ export default function OwnerViolationsPage() {
   const [dateTo, setDateTo] = useState<string>(() => today);
   const [violations, setViolations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
 
   useEffect(() => {
     if (!user || !isOwnerUser(user)) {
@@ -135,8 +138,21 @@ export default function OwnerViolationsPage() {
   const canGoNext = dateTo < today;
   const isTodayRange = dateFrom === today && dateTo === today;
 
-  const byDay = groupViolationsByDay(violations);
-  const totalCount = violations.length;
+  const filteredViolations = useMemo(() => {
+    return violations.filter((v) => {
+      if (typeFilter !== 'all' && v.violationType !== typeFilter) return false;
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        const sName = getStudentName(v).toLowerCase();
+        const desc = (v.description || '').toLowerCase();
+        if (!sName.includes(q) && !desc.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [violations, typeFilter, search]);
+
+  const byDay = groupViolationsByDay(filteredViolations);
+  const totalCount = filteredViolations.length;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -206,6 +222,37 @@ export default function OwnerViolationsPage() {
                     className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
                   />
                 </label>
+              </div>
+            </div>
+
+            {/* Search and Category Filter */}
+            <div className="mt-3 pt-3 border-t border-gray-200/80 flex flex-wrap items-center gap-3">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search resident name or infraction note..."
+                  className="w-full pl-9 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Filter className="w-4 h-4 text-gray-400" />
+                <select
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:ring-2 focus:ring-red-500"
+                >
+                  <option value="all">All Infraction Types</option>
+                  <option value="curfew">Curfew breach</option>
+                  <option value="late-entry">Late entry</option>
+                  <option value="improper-checkout">Left without checking out</option>
+                  <option value="noise">Noise / Disturbance</option>
+                  <option value="unauthorized-visitor">Unauthorized visitor</option>
+                  <option value="damage">Property damage</option>
+                  <option value="other">Other</option>
+                </select>
               </div>
             </div>
           </div>

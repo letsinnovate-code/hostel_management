@@ -9,6 +9,7 @@ const mongoose = require('mongoose');
 const Attendance = require('../../models/Attendance');
 const User = require('../../models/User');
 const Room = require('../../models/Room');
+const Hostel = require('../../models/Hostel');
 const { getBusinessDateString } = require('../../services/timezoneService');
 const { getTodayRange } = require('../../utils/dateRange');
 const AttendanceAnalyticsService = require('../../services/attendanceAnalyticsService');

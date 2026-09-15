@@ -29,6 +29,10 @@ import {
   Sparkles,
   AlertTriangle,
   FileText,
+  Key,
+  Eye,
+  EyeOff,
+  Home,
 } from 'lucide-react';
 
 export default function WardenOnboardingPage() {
@@ -69,6 +73,133 @@ export default function WardenOnboardingPage() {
   // General correction modal
   const [correctionModalOpen, setCorrectionModalOpen] = useState(false);
   const [correctionInstructions, setCorrectionInstructions] = useState('');
+
+  // Direct Student Registration Modal
+  const [registerModalOpen, setRegisterModalOpen] = useState(false);
+  const [registerSubmitting, setRegisterSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [registerForm, setRegisterForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    password: 'Student@123',
+    gender: 'Male',
+    dateOfBirth: '',
+    course: '',
+    year: '1',
+    roomId: '',
+    bedNumber: 'Bed 1',
+    parentName: '',
+    parentPhone: '',
+    parentEmail: '',
+    parentRelation: 'Parent',
+    emergencyName: '',
+    emergencyPhone: '',
+    emergencyRelation: 'Guardian',
+    street: '',
+    city: '',
+    state: '',
+    pincode: '',
+  });
+
+  useEffect(() => {
+    if (registerModalOpen && availableRooms.length === 0) {
+      api.getWardenRooms().then((res: any) => {
+        const rList = res?.data?.rooms || res?.rooms || (Array.isArray(res?.data) ? res.data : []);
+        if (rList.length > 0) {
+          setAvailableRooms(rList);
+        } else {
+          api.getAvailableRoomsForOnboarding().then((fallbackRes: any) => {
+            if (fallbackRes?.data) setAvailableRooms(fallbackRes.data);
+          }).catch(() => {});
+        }
+      }).catch(() => {
+        api.getAvailableRoomsForOnboarding().then((fallbackRes: any) => {
+          if (fallbackRes?.data) setAvailableRooms(fallbackRes.data);
+        }).catch(() => {});
+      });
+    }
+  }, [registerModalOpen, availableRooms.length]);
+
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!registerForm.name.trim() || !registerForm.email.trim() || !registerForm.phone.trim()) {
+      toast.error('Name, email, and phone are required');
+      return;
+    }
+    if (!registerForm.password.trim()) {
+      toast.error('Password is required');
+      return;
+    }
+    const targetHostelId = user?.hostelId || (selectedApp?.hostelId?._id || selectedApp?.hostelId);
+    if (!targetHostelId) {
+      toast.error('Hostel ID not identified');
+      return;
+    }
+    setRegisterSubmitting(true);
+    try {
+      await api.createWardenStudent({
+        name: registerForm.name,
+        email: registerForm.email,
+        phone: registerForm.phone,
+        password: registerForm.password,
+        hostelId: targetHostelId,
+        roomId: registerForm.roomId || undefined,
+        bedNumber: registerForm.bedNumber,
+        gender: registerForm.gender,
+        dateOfBirth: registerForm.dateOfBirth || undefined,
+        course: registerForm.course || undefined,
+        year: registerForm.year || undefined,
+        parentContact: {
+          name: registerForm.parentName,
+          phone: registerForm.parentPhone,
+          email: registerForm.parentEmail,
+          relation: registerForm.parentRelation,
+        },
+        emergencyContact: {
+          name: registerForm.emergencyName,
+          phone: registerForm.emergencyPhone,
+          relation: registerForm.emergencyRelation,
+        },
+        address: {
+          street: registerForm.street,
+          city: registerForm.city,
+          state: registerForm.state,
+          pincode: registerForm.pincode,
+        },
+      });
+      toast.success('Student registered successfully with room and bed allocation!');
+      setRegisterModalOpen(false);
+      setRegisterForm({
+        name: '',
+        email: '',
+        phone: '',
+        password: 'Student@123',
+        gender: 'Male',
+        dateOfBirth: '',
+        course: '',
+        year: '1',
+        roomId: '',
+        bedNumber: 'Bed 1',
+        parentName: '',
+        parentPhone: '',
+        parentEmail: '',
+        parentRelation: 'Parent',
+        emergencyName: '',
+        emergencyPhone: '',
+        emergencyRelation: 'Guardian',
+        street: '',
+        city: '',
+        state: '',
+        pincode: '',
+      });
+      loadData();
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || err.message || 'Failed to register student');
+    } finally {
+      setRegisterSubmitting(false);
+    }
+  };
 
   // Check role authorization
   useEffect(() => {
@@ -293,16 +424,26 @@ export default function WardenOnboardingPage() {
           </p>
         </div>
 
-        <button
-          onClick={() => {
-            setRefreshing(true);
-            loadData().finally(() => setRefreshing(false));
-          }}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 rounded-xl text-xs font-semibold shadow-xs transition-all"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-          Refresh Pipeline
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              setRefreshing(true);
+              loadData().finally(() => setRefreshing(false));
+            }}
+            className="inline-flex items-center gap-2 px-3.5 py-2 bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 rounded-xl text-xs font-semibold shadow-xs transition-all"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            Refresh Pipeline
+          </button>
+
+          <button
+            onClick={() => setRegisterModalOpen(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all"
+          >
+            <UserCheck className="w-4 h-4" />
+            Register Student
+          </button>
+        </div>
       </div>
 
       {/* KPI Ribbon */}
@@ -892,6 +1033,281 @@ export default function WardenOnboardingPage() {
                   className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg"
                 >
                   Submit Correction Request
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── DIRECT STUDENT REGISTRATION MODAL ── */}
+      {registerModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-gray-200 my-8">
+            <div className="flex items-center justify-between pb-4 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <UserCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-gray-900">Direct Student Registration</h3>
+                  <p className="text-xs text-gray-500">In-person resident onboarding and credential creation</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setRegisterModalOpen(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleRegisterSubmit} className="space-y-4 mt-4 text-xs">
+              {/* 1. Personal Information */}
+              <div>
+                <p className="font-bold text-gray-900 uppercase text-[10px] tracking-wider text-indigo-600 mb-2">
+                  1. Personal Information
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-gray-700 mb-1">Full Name *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Rahul Sharma"
+                      value={registerForm.name}
+                      onChange={(e) => setRegisterForm({ ...registerForm, name: e.target.value })}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-gray-700 mb-1">Email Address *</label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="e.g. rahul@example.com"
+                      value={registerForm.email}
+                      onChange={(e) => setRegisterForm({ ...registerForm, email: e.target.value })}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-gray-700 mb-1">Phone Number *</label>
+                    <input
+                      type="tel"
+                      required
+                      placeholder="e.g. +91 9876543210"
+                      value={registerForm.phone}
+                      onChange={(e) => setRegisterForm({ ...registerForm, phone: e.target.value })}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-gray-700 mb-1">Gender</label>
+                    <select
+                      value={registerForm.gender}
+                      onChange={(e) => setRegisterForm({ ...registerForm, gender: e.target.value })}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-gray-700 mb-1">Date of Birth</label>
+                    <input
+                      type="date"
+                      value={registerForm.dateOfBirth}
+                      onChange={(e) => setRegisterForm({ ...registerForm, dateOfBirth: e.target.value })}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-gray-700 mb-1">Course & Year</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        placeholder="Course (B.Tech)"
+                        value={registerForm.course}
+                        onChange={(e) => setRegisterForm({ ...registerForm, course: e.target.value })}
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <select
+                        value={registerForm.year}
+                        onChange={(e) => setRegisterForm({ ...registerForm, year: e.target.value })}
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        <option value="1">1st Year</option>
+                        <option value="2">2nd Year</option>
+                        <option value="3">3rd Year</option>
+                        <option value="4">4th Year</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Room & Bed Allocation */}
+              <div className="p-3 bg-indigo-50/60 rounded-xl border border-indigo-100">
+                <p className="font-bold text-indigo-900 uppercase text-[10px] tracking-wider mb-2 flex items-center gap-1.5">
+                  <BedDouble className="w-3.5 h-3.5 text-indigo-600" />
+                  2. Room & Bed Allocation
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-gray-700 mb-1">Select Room (Optional)</label>
+                    <select
+                      value={registerForm.roomId}
+                      onChange={(e) => setRegisterForm({ ...registerForm, roomId: e.target.value })}
+                      className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
+                    >
+                      <option value="">-- Assign Later / Unallocated --</option>
+                      {availableRooms.map((r: any) => (
+                        <option key={r._id || r.id} value={r._id || r.id}>
+                          Room {r.roomNumber} ({r.roomType || 'Standard'}) - {r.currentOccupancy || 0}/{r.capacity || 2} Occupied
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-gray-700 mb-1">Assigned Bed</label>
+                    <select
+                      value={registerForm.bedNumber}
+                      onChange={(e) => setRegisterForm({ ...registerForm, bedNumber: e.target.value })}
+                      className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs"
+                    >
+                      <option value="Bed 1">Bed 1</option>
+                      <option value="Bed 2">Bed 2</option>
+                      <option value="Bed 3">Bed 3</option>
+                      <option value="Bed 4">Bed 4</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Account Password & Access */}
+              <div className="p-3 bg-emerald-50/60 rounded-xl border border-emerald-100">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="font-bold text-emerald-900 uppercase text-[10px] tracking-wider flex items-center gap-1.5">
+                    <Key className="w-3.5 h-3.5 text-emerald-600" />
+                    3. Portal Password & Access *
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const randomPass = 'Hostel@' + Math.floor(1000 + Math.random() * 9000);
+                      setRegisterForm({ ...registerForm, password: randomPass });
+                    }}
+                    className="text-[10px] font-semibold text-emerald-700 hover:text-emerald-800 underline"
+                  >
+                    Generate Random
+                  </button>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    placeholder="Set resident password"
+                    value={registerForm.password}
+                    onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
+                    className="w-full px-3 py-2 pr-10 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[10px] text-gray-500 mt-1">
+                  The student will use their registered email and this password to access the resident portal.
+                </p>
+              </div>
+
+              {/* 4. Guardian Details */}
+              <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                <p className="font-bold text-gray-800 mb-2">4. Guardian / Parent Information</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Parent/Guardian Name"
+                    value={registerForm.parentName}
+                    onChange={(e) => setRegisterForm({ ...registerForm, parentName: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <input
+                    type="tel"
+                    placeholder="Parent Phone Number"
+                    value={registerForm.parentPhone}
+                    onChange={(e) => setRegisterForm({ ...registerForm, parentPhone: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* 5. Emergency Contact */}
+              <div className="p-3 bg-rose-50/50 rounded-xl border border-rose-100">
+                <p className="font-bold text-rose-900 mb-2">5. Emergency Contact</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Emergency Contact Name"
+                    value={registerForm.emergencyName}
+                    onChange={(e) => setRegisterForm({ ...registerForm, emergencyName: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <input
+                    type="tel"
+                    placeholder="Emergency Phone"
+                    value={registerForm.emergencyPhone}
+                    onChange={(e) => setRegisterForm({ ...registerForm, emergencyPhone: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Relationship"
+                    value={registerForm.emergencyRelation}
+                    onChange={(e) => setRegisterForm({ ...registerForm, emergencyRelation: e.target.value })}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* 6. Address */}
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  placeholder="Permanent Street Address"
+                  value={registerForm.street}
+                  onChange={(e) => setRegisterForm({ ...registerForm, street: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <input
+                  type="text"
+                  placeholder="City"
+                  value={registerForm.city}
+                  onChange={(e) => setRegisterForm({ ...registerForm, city: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setRegisterModalOpen(false)}
+                  className="px-4 py-2 font-semibold text-gray-600 hover:bg-gray-100 rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={registerSubmitting}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <UserCheck className="w-4 h-4" />
+                  {registerSubmitting ? 'Registering...' : 'Register & Admit Student'}
                 </button>
               </div>
             </form>

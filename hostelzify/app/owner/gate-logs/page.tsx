@@ -6,7 +6,17 @@ import { useRouter } from 'next/navigation';
 import { useAuth, isOwnerUser } from '../../../contexts/AuthContext';
 import { useOwnerHostel } from '../../../contexts/OwnerHostelContext';
 import api from '../../../services/api';
-import { LogIn, LogOut, ChevronLeft, ChevronRight, Calendar, Filter } from 'lucide-react';
+import { LogIn, LogOut, ChevronLeft, ChevronRight, Calendar, Filter, MapPin, Table as TableIcon, Layers } from 'lucide-react';
+import dynamic from 'next/dynamic';
+
+const OSMGateLogsMap = dynamic(() => import('../../../components/maps/OSMGateLogsMap'), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[380px] bg-gray-100 rounded-xl flex items-center justify-center text-xs text-gray-500">
+      Loading OpenStreetMap Gate View...
+    </div>
+  ),
+});
 
 function toDateString(d: Date) {
   return d.toISOString().slice(0, 10);
@@ -93,7 +103,7 @@ function buildGateRows(events: GateEvent[]): GateRow[] {
 
 export default function GateLogsPage() {
   const { user } = useAuth();
-  const { selectedHostel } = useOwnerHostel();
+  const { selectedHostel, activeHostel } = useOwnerHostel();
   const router = useRouter();
   const today = toDateString(new Date());
   const [dateFrom, setDateFrom] = useState<string>(() => today);
@@ -103,6 +113,18 @@ export default function GateLogsPage() {
   const [typeFilter, setTypeFilter] = useState<'all' | 'in' | 'out'>('all');
   const [timeFrom, setTimeFrom] = useState<string>('');
   const [timeTo, setTimeTo] = useState<string>('');
+  const [viewMode, setViewMode] = useState<'both' | 'table' | 'map'>('both');
+
+  // Robust coordinate extraction — tries both storage formats
+  const hostelLat: number =
+    (activeHostel as any)?.address?.coordinates?.latitude ??
+    (activeHostel as any)?.location?.coordinates?.[1] ??
+    (activeHostel as any)?.latitude ?? 23.5235;
+  const hostelLng: number =
+    (activeHostel as any)?.address?.coordinates?.longitude ??
+    (activeHostel as any)?.location?.coordinates?.[0] ??
+    (activeHostel as any)?.longitude ?? 77.8139;
+  const hostelName = activeHostel?.name ?? 'Hostel Entrance';
 
   useEffect(() => {
     if (!user || !isOwnerUser(user)) {
@@ -177,7 +199,37 @@ export default function GateLogsPage() {
         </Link>
         <div className="flex-1">
           <h1 className="text-xl font-bold text-gray-900">Gate logs</h1>
-          <p className="text-sm text-gray-500">Check-in and check-out by time</p>
+          <p className="text-sm text-gray-500">Check-in and check-out by time with OpenStreetMap tracking</p>
+        </div>
+
+        <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
+          <button
+            onClick={() => setViewMode('table')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              viewMode === 'table' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <TableIcon className="w-3.5 h-3.5" />
+            Table
+          </button>
+          <button
+            onClick={() => setViewMode('map')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              viewMode === 'map' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <MapPin className="w-3.5 h-3.5" />
+            Map
+          </button>
+          <button
+            onClick={() => setViewMode('both')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              viewMode === 'both' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            Split
+          </button>
         </div>
       </header>
 
@@ -309,10 +361,36 @@ export default function GateLogsPage() {
               <p className="text-sm mt-1">Try changing type or time of day.</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
+            <div>
+              {(viewMode === 'both' || viewMode === 'map') && (
+                <div className="p-4 border-b border-gray-200 bg-gray-50/50">
+                  <div className="flex items-center justify-between mb-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-gray-700 flex items-center gap-1.5">
+                        <MapPin className="w-4 h-4 text-emerald-600" />
+                        Gate Location & Movement Monitor ({hostelName})
+                      </h3>
+                    </div>
+                    <span className="text-[11px] font-semibold text-gray-500">
+                      Leaflet / OpenStreetMap Geo-Logs
+                    </span>
+                  </div>
+                  <OSMGateLogsMap
+                    hostelLat={hostelLat}
+                    hostelLng={hostelLng}
+                    hostelName={hostelName}
+                    events={events}
+                    height={viewMode === 'map' ? '540px' : '320px'}
+                  />
+                </div>
+              )}
+
+              {(viewMode === 'both' || viewMode === 'table') && (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
                       Time
                     </th>
@@ -375,6 +453,8 @@ export default function GateLogsPage() {
                 </tbody>
               </table>
             </div>
+          )}
+        </div>
           )}
           {events.length > 0 && (
             <div className="px-4 py-2 bg-gray-50 border-t border-gray-200 text-sm text-gray-500">

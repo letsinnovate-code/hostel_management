@@ -112,6 +112,21 @@ function UsersContent() {
     }
   };
 
+  const toggleUserStatus = async (userId: string, currentStatus: string) => {
+    const newStatus = currentStatus === 'active' ? 'suspended' : 'active';
+    if (!confirm(`Are you sure you want to ${newStatus === 'suspended' ? 'suspend' : 'activate'} this user?`)) return;
+    
+    try {
+      const res = await api.updateUserStatus(userId, newStatus);
+      if (res?.success) {
+        showToast(`User ${newStatus} successfully`, 'success');
+        loadData(false);
+      }
+    } catch {
+      showToast('Failed to update user status', 'error');
+    }
+  };
+
   const filteredUsers = users.filter((u) => {
     const q = search.toLowerCase().trim();
     const matchesSearch =
@@ -394,15 +409,16 @@ function UsersContent() {
                           </span>
                         </td>
                         <td className="p-4">
-                          <span
-                            className={`px-2.5 py-1 rounded-full text-[11px] font-semibold uppercase tracking-wider ${
-                              u.status === 'active'
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                          <button
+                            onClick={() => toggleUserStatus(u._id, u.status || 'active')}
+                            className={`px-2.5 py-1 rounded-full text-[11px] font-semibold uppercase tracking-wider border transition-colors hover:opacity-80 ${
+                              u.status === 'suspended'
+                                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                             }`}
                           >
-                            {u.status || 'active'}
-                          </span>
+                            {u.status === 'suspended' ? 'Suspended' : 'Active'}
+                          </button>
                         </td>
                         <td className="p-4">
                           <div className="space-y-1 text-slate-600">

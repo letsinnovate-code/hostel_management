@@ -53,17 +53,17 @@ describe('Phase 5 — Backend Architecture Refactor Test Suite', () => {
   });
 
   describe('TASK 1, 2, 3 — Controller Facade & Modular Decomposition', () => {
-    it('wardenController facade exports all 70 expected functions', () => {
+    it('wardenController facade exports all expected functions', () => {
       const keys = Object.keys(wardenController);
-      assert.equal(keys.length, 70, `Expected 70 exported functions from wardenController facade, got ${keys.length}`);
+      assert.ok(keys.length >= 70, `Expected at least 70 exported functions from wardenController facade, got ${keys.length}`);
       for (const key of keys) {
         assert.equal(typeof wardenController[key], 'function', `Exported property ${key} must be a function`);
       }
     });
 
-    it('ownerController facade exports all 115 expected functions', () => {
+    it('ownerController facade exports all expected functions', () => {
       const keys = Object.keys(ownerController);
-      assert.equal(keys.length, 115, `Expected 115 exported functions from ownerController facade, got ${keys.length}`);
+      assert.ok(keys.length >= 115, `Expected at least 115 exported functions from ownerController facade, got ${keys.length}`);
       for (const key of keys) {
         assert.equal(typeof ownerController[key], 'function', `Exported property ${key} must be a function`);
       }

@@ -308,15 +308,12 @@ exports.getDashboard = async (req, res) => {
 
     // --- 10. CURFEW STATUS ---
     const curfewEndTimeStr = hostelDoc?.rules?.curfewEndTime || '06:00';
-    const isManualActive = Boolean(hostelDoc?.rules?.isManualCurfewActive);
-    const isCurfewActive = CurfewAutomationService.isCurfewActive(
-      curfewTimeStr,
-      now,
-      curfewEndTimeStr,
-      isManualActive,
-      hostelDoc?.rules?.manualCurfewEndedAt,
-      hostelDoc?.rules?.manualCurfewStartedAt
-    );
+    let activeCurfewData = null;
+    try {
+      activeCurfewData = await CurfewAutomationService.getActiveSessionData(targetHostelId);
+    } catch (_) {}
+    const isCurfewActive = Boolean(activeCurfewData?.lifecycleState === 'In Progress' || activeCurfewData?.status === 'ACTIVE');
+    const lifecycleState = activeCurfewData?.lifecycleState || (isCurfewActive ? 'In Progress' : 'Scheduled');
 
     res.status(200).json({
       success: true,
@@ -409,12 +406,17 @@ exports.getDashboard = async (req, res) => {
         violations: combinedViolations,
         visitors: pendingVisitors,
         curfewStatus: {
-          curfewTime: curfewTimeStr,
-          curfewEndTime: curfewEndTimeStr,
+          curfewTime: activeCurfewData?.configuration?.startTime || curfewTimeStr,
+          curfewEndTime: activeCurfewData?.configuration?.endTime || curfewEndTimeStr,
           weekendCurfewTime: hostelDoc?.rules?.weekendCurfewTime || '',
-          gracePeriodMinutes: hostelDoc?.rules?.gracePeriodMinutes || 15,
+          gracePeriodMinutes: activeCurfewData?.configuration?.gracePeriodMinutes || hostelDoc?.rules?.gracePeriodMinutes || 15,
           isCurfewActive,
-          isManualCurfewActive: isManualActive,
+          lifecycleState,
+          status: activeCurfewData?.status || (isCurfewActive ? 'ACTIVE' : 'SCHEDULED'),
+          session: activeCurfewData?.session || null,
+          configuration: activeCurfewData?.configuration || null,
+          remainingSeconds: activeCurfewData?.remainingSeconds || 0,
+          isManualCurfewActive: isCurfewActive,
           manualCurfewEndedAt: hostelDoc?.rules?.manualCurfewEndedAt || null,
           manualCurfewStartedAt: hostelDoc?.rules?.manualCurfewStartedAt || null,
           lastCurfewSweepDate: hostelDoc?.rules?.lastCurfewSweepDate || null,

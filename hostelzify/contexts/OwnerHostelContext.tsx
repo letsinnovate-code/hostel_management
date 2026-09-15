@@ -9,15 +9,30 @@ export interface HostelOption {
   _id: string;
   id?: string;
   name: string;
+  type?: string;
+  capacity?: number;
+  totalRooms?: number;
+  address?: {
+    street?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    coordinates?: {
+      latitude?: number;
+      longitude?: number;
+    };
+  };
   [key: string]: unknown;
 }
 
 interface OwnerHostelContextType {
   hostels: HostelOption[];
   selectedHostel: string;
+  activeHostel: HostelOption | null;
   setSelectedHostel: (id: string) => void;
   loading: boolean;
   refetchHostels: () => Promise<void>;
+  updateHostelInState: (updated: Partial<HostelOption> & { _id?: string; id?: string }) => void;
 }
 
 const OwnerHostelContext = createContext<OwnerHostelContextType | null>(null);
@@ -94,12 +109,29 @@ export function OwnerHostelProvider({ children }: { children: ReactNode }) {
     }
   }, [selectedHostel]);
 
+  const activeHostel = hostels.find((h) => (h._id || h.id) === selectedHostel) || null;
+
+  const updateHostelInState = useCallback((updated: Partial<HostelOption> & { _id?: string; id?: string }) => {
+    const targetId = updated._id || updated.id;
+    if (!targetId) return;
+    setHostels((prev) =>
+      prev.map((h) => {
+        if ((h._id || h.id) === targetId) {
+          return { ...h, ...updated };
+        }
+        return h;
+      })
+    );
+  }, []);
+
   const value: OwnerHostelContextType = {
     hostels,
     selectedHostel,
+    activeHostel,
     setSelectedHostel,
     loading,
     refetchHostels: loadHostels,
+    updateHostelInState,
   };
 
   return (

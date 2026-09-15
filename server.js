@@ -142,6 +142,7 @@ app.use('/api/auth', require('./src/routes/authRoutes'));
 app.use('/api/public', require('./src/routes/publicRoutes'));
 app.use('/api/owner', require('./src/routes/ownerRoutes'));
 app.use('/api/warden', require('./src/routes/wardenRoutes'));
+app.use('/api/supervisor', require('./src/routes/supervisorRoutes'));
 app.use('/api/cleaner', require('./src/routes/cleanerRoutes'));
 app.use('/api/student', require('./src/routes/studentRoutes'));
 app.use('/api/security', require('./src/routes/securityRoutes'));

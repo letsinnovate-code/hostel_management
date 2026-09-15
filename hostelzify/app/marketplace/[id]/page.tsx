@@ -9,7 +9,12 @@ import {
   Droplet, Activity, Dumbbell, BookOpen, Tv, Coffee, Car, Wifi, UtensilsCrossed,
   Shirt, ArrowLeft
 } from 'lucide-react';
-import GoogleMap from '../../../components/GoogleMap';
+import dynamic from 'next/dynamic';
+const GoogleMap = dynamic(
+  () => import('../../../components/maps/OSMLocationView'),
+  { ssr: false, loading: () => <div className="w-full h-96 bg-gray-100 rounded-xl flex items-center justify-center text-xs text-gray-500">Loading map...</div> }
+);
+
 import EnquiryForm from '../../../components/marketplace/EnquiryForm';
 import CallbackForm from '../../../components/marketplace/CallbackForm';
 import PublicNavbar from '../../../components/layout/PublicNavbar';
@@ -368,9 +373,11 @@ export default function MarketplaceHostelDetailPage() {
                   <GoogleMap
                     latitude={hostel.address.coordinates.latitude}
                     longitude={hostel.address.coordinates.longitude}
+                    label={hostel.name}
                     height="100%"
                     zoom={15}
                   />
+
                 </div>
               </Section>
             </div>

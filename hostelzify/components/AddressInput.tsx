@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { MapPin, Search, Navigation, Loader2, CheckCircle2, Crosshair, AlertCircle } from 'lucide-react';
+import type * as LType from 'leaflet';
 
-interface AddressComponents {
+export interface AddressComponents {
   street?: string;
   city?: string;
   state?: string;
@@ -10,19 +12,14 @@ interface AddressComponents {
   country?: string;
 }
 
-interface AddressInputProps {
+export interface AddressInputProps {
   value?: string;
   onChange?: (address: string, coordinates?: { latitude: number; longitude: number }, placeId?: string) => void;
   error?: string;
   required?: boolean;
   onGeocode?: (coordinates: { latitude: number; longitude: number }, formattedAddress: string, placeId: string) => void;
   onAddressComponents?: (components: AddressComponents) => void;
-}
-
-declare global {
-  interface Window {
-    google: any;
-  }
+  initialCoordinates?: { latitude: number; longitude: number };
 }
 
 export default function AddressInput({
@@ -32,606 +29,366 @@ export default function AddressInput({
   required = false,
   onGeocode,
   onAddressComponents,
+  initialCoordinates,
 }: AddressInputProps) {
-  const [isLoaded, setIsLoaded] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const g = (window as any).google;
-      return !!(g && g.maps && g.maps.places && g.maps.places.Autocomplete);
-    }
-    return false;
-  });
   const [searchQuery, setSearchQuery] = useState(value);
-  const [mapCenter, setMapCenter] = useState({ lat: 28.6139, lng: 77.2090 }); // Default to Delhi
-  const [markerPosition, setMarkerPosition] = useState<{ lat: number; lng: number } | null>(null);
-  const [selectedAddress, setSelectedAddress] = useState<string>('');
-  const [selectedPlaceId, setSelectedPlaceId] = useState<string>('');
-  const [addressComponents, setAddressComponents] = useState<AddressComponents>({});
-  const [map, setMap] = useState<any>(null);
-  const markerRef = useRef<any>(null);
-  const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [gettingLocation, setGettingLocation] = useState(false);
-  const [locationError, setLocationError] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [detectingGps, setDetectingGps] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
 
-  const autocompleteRef = useRef<any>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const mapRef = useRef<HTMLDivElement>(null);
-  const geocoderRef = useRef<any>(null);
-
-  // Helper function to parse address components
-  const parseAddressComponents = (components: any[]): AddressComponents => {
-    const parsed: AddressComponents = {};
-    let streetNumber = '';
-    let route = '';
-
-    components.forEach((component: any) => {
-      const types = component.types;
-
-      if (types.includes('street_number')) {
-        streetNumber = component.long_name;
-      } else if (types.includes('route')) {
-        route = component.long_name;
-      } else if (types.includes('locality') || types.includes('sublocality_level_1') || types.includes('sublocality')) {
-        if (!parsed.city) {
-          parsed.city = component.long_name;
-        }
-      } else if (types.includes('administrative_area_level_1')) {
-        parsed.state = component.long_name;
-      } else if (types.includes('postal_code')) {
-        parsed.pincode = component.long_name;
-      } else if (types.includes('country')) {
-        parsed.country = component.long_name;
-      }
-    });
-
-    // Combine street number and route
-    if (streetNumber && route) {
-      parsed.street = `${streetNumber} ${route}`;
-    } else if (route) {
-      parsed.street = route;
-    } else if (streetNumber) {
-      parsed.street = streetNumber;
+  // Default coordinate (Bhopal/Central India or initialCoordinates or from address)
+  const [currentCoords, setCurrentCoords] = useState<{ lat: number; lng: number }>(() => {
+    if (initialCoordinates && Number.isFinite(initialCoordinates.latitude) && Number.isFinite(initialCoordinates.longitude)) {
+      return { lat: initialCoordinates.latitude, lng: initialCoordinates.longitude };
     }
+    return { lat: 23.2599, lng: 77.4126 };
+  });
 
-    return parsed;
-  };
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<LType.Map | null>(null);
+  const markerRef = useRef<LType.Marker | null>(null);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [isClient, setIsClient] = useState(false);
 
-  // Load Google Maps script or Places library
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const checkPlacesLoaded = () => {
-      const g = (window as any).google;
-      return !!(g && g.maps && g.maps.places && g.maps.places.Autocomplete);
-    };
-
-    if (checkPlacesLoaded()) {
-      return;
-    }
-
-    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-    const scriptId = 'google-maps-places-script';
-
-    // If Google is loaded but missing places library, try modern dynamic import
-    const g = (window as any).google;
-    if (g && g.maps && typeof g.maps.importLibrary === 'function') {
-      g.maps.importLibrary('places').then(() => {
-        setIsLoaded(true);
-      }).catch(() => {});
-    }
-
-    // Check if script element already exists
-    let script = document.getElementById(scriptId) as HTMLScriptElement;
-    if (!script && !((window as any).google?.maps?.places)) {
-      script = document.createElement('script');
-      script.id = scriptId;
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry`;
-      script.async = true;
-      script.defer = true;
-      script.onload = () => {
-        if (checkPlacesLoaded()) setIsLoaded(true);
-      };
-      document.head.appendChild(script);
-    }
-
-    const interval = setInterval(() => {
-      if (checkPlacesLoaded()) {
-        setIsLoaded(true);
-        clearInterval(interval);
-      }
-    }, 200);
-
-    const timeout = setTimeout(() => {
-      clearInterval(interval);
-    }, 10000);
-
-    return () => {
-      clearInterval(interval);
-      clearTimeout(timeout);
-    };
+    setIsClient(true);
   }, []);
 
-  // Initialize Autocomplete
   useEffect(() => {
-    if (!isLoaded || !inputRef.current) return;
-    const google = (window as any).google;
-    if (!google?.maps?.places?.Autocomplete) return;
-
-    try {
-      const autocomplete = new google.maps.places.Autocomplete(inputRef.current, {
-        types: ['address'],
-        componentRestrictions: { country: 'in' },
-      });
-
-      autocompleteRef.current = autocomplete;
-
-      autocomplete.addListener('place_changed', () => {
-        const place = autocomplete.getPlace();
-
-        if (!place.geometry || !place.geometry.location) {
-          console.error('No details available for the selected place');
-          return;
-        }
-
-        const lat = place.geometry.location.lat();
-        const lng = place.geometry.location.lng();
-        const formattedAddress = place.formatted_address || place.name || '';
-        const placeId = place.place_id || '';
-
-        // Parse address components
-        const components = place.address_components || [];
-        const parsedComponents = parseAddressComponents(components);
-
-        setSearchQuery(formattedAddress);
-        setMapCenter({ lat, lng });
-        setMarkerPosition({ lat, lng });
-        setSelectedAddress(formattedAddress);
-        setSelectedPlaceId(placeId);
-        setAddressComponents(parsedComponents);
-
-        // Pass address components to parent
-        if (onAddressComponents) {
-          onAddressComponents(parsedComponents);
-        }
-      });
-    } catch (err) {
-      console.warn('Autocomplete init error:', err);
+    if (value && value !== searchQuery) {
+      setSearchQuery(value);
     }
+  }, [value]);
+
+  // Parse Nominatim Address details into structured AddressComponents
+  const parseNominatimAddress = (details: any, displayName: string): AddressComponents => {
+    if (!details) return {};
+    const street =
+      details.road ||
+      details.suburb ||
+      details.neighbourhood ||
+      details.hamlet ||
+      details.pedestrian ||
+      '';
+    const city =
+      details.city ||
+      details.town ||
+      details.village ||
+      details.county ||
+      details.state_district ||
+      '';
+    const state = details.state || '';
+    const pincode = details.postcode || '';
+    const country = details.country || 'India';
+
+    return { street, city, state, pincode, country };
+  };
+
+  // Reverse geocode lat/lng to get address
+  const reverseGeocode = async (lat: number, lng: number) => {
+    try {
+      const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&addressdetails=1`;
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'HostelManagementApp/1.0 (contact@hostelzify.com)',
+          'Accept-Language': 'en',
+        },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.display_name) {
+        const formatted = data.display_name;
+        const comps = parseNominatimAddress(data.address, formatted);
+
+        setSearchQuery(formatted);
+        if (onChange) {
+          onChange(formatted, { latitude: lat, longitude: lng }, String(data.place_id || ''));
+        }
+        if (onGeocode) {
+          onGeocode({ latitude: lat, longitude: lng }, formatted, String(data.place_id || ''));
+        }
+        if (onAddressComponents) {
+          onAddressComponents(comps);
+        }
+        setFeedback(`Selected: ${formatted.slice(0, 50)}...`);
+      }
+    } catch (e) {
+      console.warn('Reverse geocode error:', e);
+    }
+  };
+
+  // Initialize Leaflet Map
+  useEffect(() => {
+    if (!isClient || !containerRef.current) return;
+
+    let isMounted = true;
+
+    import('leaflet').then((L) => {
+      if (!isMounted || !containerRef.current) return;
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+
+      const map = L.map(containerRef.current, {
+        center: [currentCoords.lat, currentCoords.lng],
+        zoom: 15,
+        scrollWheelZoom: true,
+      });
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        maxZoom: 19,
+      }).addTo(map);
+
+      // Custom Hostel Pin Icon
+      const pinIcon = L.divIcon({
+        className: 'hostel-map-pin',
+        html: `
+          <div style="background-color: #2563eb; width: 34px; height: 34px; border-radius: 50%; border: 3px solid #ffffff; box-shadow: 0 4px 14px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+              <circle cx="12" cy="10" r="3"/>
+            </svg>
+          </div>
+        `,
+        iconSize: [34, 34],
+        iconAnchor: [17, 34],
+        popupAnchor: [0, -34],
+      });
+
+      const marker = L.marker([currentCoords.lat, currentCoords.lng], {
+        icon: pinIcon,
+        draggable: true,
+      }).addTo(map);
+
+      marker.bindPopup(`<b>Hostel Location</b><br/>Drag pin or click map to reposition.`);
+
+      marker.on('dragend', () => {
+        const pos = marker.getLatLng();
+        setCurrentCoords({ lat: pos.lat, lng: pos.lng });
+        reverseGeocode(pos.lat, pos.lng);
+      });
+
+      map.on('click', (e: LType.LeafletMouseEvent) => {
+        const { lat, lng } = e.latlng;
+        marker.setLatLng([lat, lng]);
+        setCurrentCoords({ lat, lng });
+        reverseGeocode(lat, lng);
+      });
+
+      markerRef.current = marker;
+      mapInstanceRef.current = map;
+
+      // Force recalculation of container size after mounting
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 250);
+    });
 
     return () => {
-      if (autocompleteRef.current && (window as any).google?.maps?.event) {
-        (window as any).google.maps.event.clearInstanceListeners(autocompleteRef.current);
+      isMounted = false;
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
       }
     };
-  }, [isLoaded]);
+  }, [isClient]);
 
-  // Initialize map
-  useEffect(() => {
-    if (!isLoaded || !mapRef.current || !(window as any).google || map) return;
-
-    const google = (window as any).google;
-    const newMap = new google.maps.Map(mapRef.current, {
-      center: mapCenter,
-      zoom: 15,
-      streetViewControl: false,
-      mapTypeControl: false,
-      fullscreenControl: true,
-      zoomControl: true,
-    });
-
-    setMap(newMap);
-    geocoderRef.current = new google.maps.Geocoder();
-
-    // Add click listener - update marker position and geocode
-    newMap.addListener('click', (e: any) => {
-      if (e.latLng) {
-        const lat = e.latLng.lat();
-        const lng = e.latLng.lng();
-        setMapCenter({ lat, lng });
-        setMarkerPosition({ lat, lng });
-
-        // Reverse geocode to get address components
-        geocoderRef.current.geocode(
-          { location: { lat, lng } },
-          (results: any[], status: string) => {
-            if (status === 'OK' && results[0]) {
-              const formattedAddress = results[0].formatted_address;
-              const placeId = results[0].place_id;
-              const components = results[0].address_components || [];
-              const parsedComponents = parseAddressComponents(components);
-
-              setSelectedAddress(formattedAddress);
-              setSelectedPlaceId(placeId);
-              setAddressComponents(parsedComponents);
-
-              // Pass address components to parent
-              if (onAddressComponents) {
-                onAddressComponents(parsedComponents);
-              }
-            } else {
-              setSelectedAddress('');
-              setSelectedPlaceId('');
-              setAddressComponents({});
-            }
-          }
-        );
+  // Pan to coords when currentCoords changes
+  const updateMapPosition = useCallback(
+    (lat: number, lng: number) => {
+      setCurrentCoords({ lat, lng });
+      if (mapInstanceRef.current && markerRef.current) {
+        mapInstanceRef.current.flyTo([lat, lng], 16, { duration: 1 });
+        markerRef.current.setLatLng([lat, lng]);
       }
-    });
-  }, [isLoaded, map]);
+    },
+    []
+  );
 
-  // Update marker position
-  useEffect(() => {
-    if (!map || !(window as any).google) return;
+  // Search autocomplete with OpenStreetMap Nominatim
+  const handleSearchChange = (text: string) => {
+    setSearchQuery(text);
+    setShowSuggestions(true);
 
-    // If we have a marker position, update/create marker
-    if (markerPosition) {
-      const position = { lat: markerPosition.lat, lng: markerPosition.lng };
-
-      map.setCenter(position);
-
-      if (markerRef.current) {
-        markerRef.current.setPosition(position);
-      } else {
-        const google = (window as any).google;
-        const newMarker = new google.maps.Marker({
-          position: position,
-          map: map,
-          draggable: true,
-          animation: google.maps.Animation.DROP,
-        });
-
-        newMarker.addListener('dragend', (e: any) => {
-          if (e.latLng) {
-            const lat = e.latLng.lat();
-            const lng = e.latLng.lng();
-            setMapCenter({ lat, lng });
-            setMarkerPosition({ lat, lng });
-
-            // Reverse geocode to get address components
-            if (geocoderRef.current) {
-              geocoderRef.current.geocode(
-                { location: { lat, lng } },
-                (results: any[], status: string) => {
-                  if (status === 'OK' && results[0]) {
-                    const formattedAddress = results[0].formatted_address;
-                    const placeId = results[0].place_id;
-                    const components = results[0].address_components || [];
-                    const parsedComponents = parseAddressComponents(components);
-
-                    setSelectedAddress(formattedAddress);
-                    setSelectedPlaceId(placeId);
-                    setAddressComponents(parsedComponents);
-
-                    // Pass address components to parent
-                    if (onAddressComponents) {
-                      onAddressComponents(parsedComponents);
-                    }
-                  } else {
-                    setSelectedAddress('');
-                    setSelectedPlaceId('');
-                    setAddressComponents({});
-                  }
-                }
-              );
-            }
-          }
-        });
-
-        markerRef.current = newMarker;
-      }
-    } else {
-      // If no marker position, remove marker if it exists
-      if (markerRef.current) {
-        markerRef.current.setMap(null);
-        markerRef.current = null;
-      }
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
     }
-  }, [map, markerPosition]);
 
-  const handleAddressInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newValue = e.target.value;
-    setSearchQuery(newValue);
+    if (!text.trim() || text.length < 3) {
+      setSuggestions([]);
+      setSearching(false);
+      return;
+    }
+
+    setSearching(true);
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(text)}&limit=5&addressdetails=1&countrycodes=in`;
+        const res = await fetch(url, {
+          headers: {
+            'User-Agent': 'HostelManagementApp/1.0 (contact@hostelzify.com)',
+            'Accept-Language': 'en',
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSuggestions(Array.isArray(data) ? data : []);
+        }
+      } catch (err) {
+        console.warn('Nominatim search failed:', err);
+      } finally {
+        setSearching(false);
+      }
+    }, 400);
   };
 
-  const applySavedLocation = (
-    lat: number,
-    lng: number,
-    address: string,
-    placeId: string,
-    components: AddressComponents
-  ) => {
+  const handleSelectSuggestion = (item: any) => {
+    const lat = parseFloat(item.lat);
+    const lng = parseFloat(item.lon);
+    const formatted = item.display_name;
+    const comps = parseNominatimAddress(item.address, formatted);
+
+    setSearchQuery(formatted);
+    setShowSuggestions(false);
+    setSuggestions([]);
+    updateMapPosition(lat, lng);
+
     if (onChange) {
-      onChange(address, { latitude: lat, longitude: lng }, placeId);
+      onChange(formatted, { latitude: lat, longitude: lng }, String(item.place_id || ''));
     }
     if (onGeocode) {
-      onGeocode({ latitude: lat, longitude: lng }, address, placeId);
+      onGeocode({ latitude: lat, longitude: lng }, formatted, String(item.place_id || ''));
     }
-    if (onAddressComponents && Object.keys(components).length > 0) {
-      onAddressComponents(components);
+    if (onAddressComponents) {
+      onAddressComponents(comps);
     }
-    setSaveFeedback('Location saved');
-    setTimeout(() => setSaveFeedback(null), 2500);
+    setFeedback(`Address set: ${item.display_name.slice(0, 60)}...`);
   };
 
-  const handleSaveLocation = () => {
-    if (markerPosition) {
-      const address = selectedAddress || `Location at ${markerPosition.lat.toFixed(6)}, ${markerPosition.lng.toFixed(6)}`;
-      applySavedLocation(
-        markerPosition.lat,
-        markerPosition.lng,
-        address,
-        selectedPlaceId,
-        addressComponents
-      );
-      return;
-    }
-
-    // No marker: try to geocode the search query
-    const query = (searchQuery || value || '').trim();
-    if (!query) return;
-
-    setSaving(true);
-    const google = typeof window !== 'undefined' ? (window as any).google : null;
-    if (!google?.maps?.Geocoder) {
-      setSaveFeedback('Enter an address and select from suggestions, or click on the map.');
-      setSaving(false);
-      setTimeout(() => setSaveFeedback(null), 4000);
-      return;
-    }
-
-    const geocoder = new google.maps.Geocoder();
-    geocoder.geocode({ address: query }, (results: any[], status: string) => {
-      setSaving(false);
-      if (status !== 'OK' || !results?.[0]) {
-        setSaveFeedback('Could not find that address. Select from the dropdown or click on the map.');
-        setTimeout(() => setSaveFeedback(null), 4000);
-        return;
-      }
-      const loc = results[0].geometry.location;
-      const lat = typeof loc.lat === 'function' ? loc.lat() : loc.lat;
-      const lng = typeof loc.lng === 'function' ? loc.lng() : loc.lng;
-      const formattedAddress = results[0].formatted_address || query;
-      const placeId = results[0].place_id || '';
-      const components = parseAddressComponents(results[0].address_components || []);
-      setMarkerPosition({ lat, lng });
-      setSelectedAddress(formattedAddress);
-      setSelectedPlaceId(placeId);
-      setAddressComponents(components);
-      setMapCenter({ lat, lng });
-      applySavedLocation(lat, lng, formattedAddress, placeId, components);
-    });
-  };
-
-  const canSave = !!markerPosition || !!((searchQuery || value || '').trim());
-
-  const handleUseCurrentLocation = () => {
+  // Browser Geolocation / GPS
+  const handleDetectGPS = () => {
     if (!navigator.geolocation) {
-      setLocationError('Location is not supported by your browser.');
-      setTimeout(() => setLocationError(null), 4000);
+      alert('Geolocation is not supported by your browser.');
       return;
     }
-    setLocationError(null);
-    setGettingLocation(true);
+
+    setDetectingGps(true);
+    setFeedback('Detecting GPS location...');
+
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-        setMarkerPosition({ lat, lng });
-        setMapCenter({ lat, lng });
-        setGettingLocation(false);
-        const google = typeof window !== 'undefined' ? (window as any).google : null;
-        if (!google?.maps?.Geocoder) {
-          setSaveFeedback('Location set. Click Save Location to confirm.');
-          setTimeout(() => setSaveFeedback(null), 3000);
-          return;
-        }
-        const geocoder = new google.maps.Geocoder();
-        geocoder.geocode({ location: { lat, lng } }, (results: any[], status: string) => {
-          if (status === 'OK' && results?.[0]) {
-            const formattedAddress = results[0].formatted_address;
-            const placeId = results[0].place_id || '';
-            const components = parseAddressComponents(results[0].address_components || []);
-            setSelectedAddress(formattedAddress);
-            setSelectedPlaceId(placeId);
-            setAddressComponents(components);
-            setSearchQuery(formattedAddress);
-            applySavedLocation(lat, lng, formattedAddress, placeId, components);
-          } else {
-            const fallbackAddress = `Location at ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-            setSelectedAddress(fallbackAddress);
-            setSearchQuery(fallbackAddress);
-            applySavedLocation(lat, lng, fallbackAddress, '', {});
-          }
-        });
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setDetectingGps(false);
+        updateMapPosition(lat, lng);
+        reverseGeocode(lat, lng);
       },
       (err) => {
-        setGettingLocation(false);
-        const message =
-          err.code === 1
-            ? 'Location permission denied. Please allow access in your browser settings.'
-            : err.code === 2
-              ? 'Location unavailable. Please try again.'
-              : err.code === 3
-                ? 'Location request timed out. Please try again.'
-                : 'Could not get your location. Please try again.';
-        setLocationError(message);
-        setTimeout(() => setLocationError(null), 5000);
+        setDetectingGps(false);
+        setFeedback(null);
+        alert(`Could not detect location: ${err.message}`);
       },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+      { enableHighAccuracy: true, timeout: 10000 }
     );
   };
 
-  const containerStyle = {
-    width: '100%',
-    height: '400px',
-  };
-
   return (
-    <div className="space-y-4">
-      <label
-        htmlFor="address"
-        className="text-slate-700 font-medium flex items-center gap-2"
-      >
-        <svg
-          className="w-4 h-4 text-emerald-600"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-          />
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-          />
-        </svg>
-        Address
-      </label>
+    <div className="space-y-3">
+      <div>
+        <label className="block text-sm font-semibold text-gray-800 mb-1">
+          Hostel Address & Location Coordinates {required && <span className="text-red-500">*</span>}
+        </label>
+        <p className="text-xs text-gray-500 mb-2">
+          Search your hostel's street/area or click anywhere on the OpenStreetMap to drop the entrance pin.
+        </p>
 
-      {/* Search Bar and Use current location */}
-      {isLoaded ? (
-        <div className="space-y-2">
+        {/* Search Bar + GPS Button */}
+        <div className="relative">
           <div className="flex gap-2">
-            <input
-              ref={inputRef}
-              id="address"
-              name="address"
-              value={searchQuery}
-              onChange={handleAddressInputChange}
-              placeholder="Search for an address"
-              className={`flex-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 ${
-                error
-                  ? 'border-rose-500 focus:border-rose-500 focus:ring-rose-500'
-                  : 'border-slate-200 focus:border-emerald-500 focus:ring-emerald-500'
-              }`}
-              aria-invalid={!!error}
-              required={required}
-            />
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                onFocus={() => setShowSuggestions(true)}
+                placeholder="Search hostel address (e.g. MG Road, Indore or City, State)..."
+                className="w-full pl-9 pr-8 py-2.5 text-xs sm:text-sm border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 bg-white"
+              />
+              {searching && (
+                <Loader2 className="w-4 h-4 text-blue-600 animate-spin absolute right-3 top-1/2 -translate-y-1/2" />
+              )}
+            </div>
+
             <button
               type="button"
-              onClick={handleUseCurrentLocation}
-              disabled={gettingLocation}
-              className="flex items-center gap-2 px-4 py-2 rounded-md font-medium text-sm whitespace-nowrap border border-emerald-600 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Use your current location"
+              onClick={handleDetectGPS}
+              disabled={detectingGps}
+              className="px-3.5 py-2.5 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 shadow-xs disabled:opacity-50"
+              title="Use current device GPS location"
             >
-              {gettingLocation ? (
-                <>
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  Getting location...
-                </>
+              {detectingGps ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
-                <>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  Use my location
-                </>
+                <Crosshair className="w-4 h-4 text-blue-600" />
               )}
+              <span className="hidden sm:inline">Use My GPS</span>
             </button>
           </div>
-          {locationError && (
-            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-              {locationError}
-            </p>
+
+          {/* Autocomplete Suggestions Dropdown */}
+          {showSuggestions && suggestions.length > 0 && (
+            <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-xl border border-gray-200 shadow-xl z-50 overflow-hidden divide-y divide-gray-100 max-h-64 overflow-y-auto">
+              {suggestions.map((item, idx) => (
+                <button
+                  key={item.place_id || idx}
+                  type="button"
+                  onClick={() => handleSelectSuggestion(item)}
+                  className="w-full text-left px-3.5 py-2.5 hover:bg-blue-50/70 transition-colors flex items-start gap-2.5 text-xs text-gray-800"
+                >
+                  <MapPin className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                  <span className="line-clamp-2 leading-relaxed">{item.display_name}</span>
+                </button>
+              ))}
+            </div>
           )}
         </div>
-      ) : (
-        <input
-          disabled
-          placeholder="Loading Google Maps..."
-          className="w-full px-3 py-2 border border-slate-200 rounded-md bg-slate-50 text-slate-500"
-        />
-      )}
-
-      {/* Map */}
-      <div className="h-[400px] w-full rounded-lg overflow-hidden border border-slate-200">
-        {isLoaded ? (
-          <div ref={mapRef} style={containerStyle} />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center bg-slate-100">
-            <svg
-              className="w-6 h-6 animate-spin text-slate-400"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-              />
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-              />
-            </svg>
-          </div>
-        )}
       </div>
 
-      {/* Display coordinates and address */}
-      {markerPosition && (
-        <div className="p-3 bg-slate-50 border border-slate-200 rounded-md">
-          <div className="text-sm space-y-1">
-            <div>
-              <span className="font-medium text-slate-700">Latitude: </span>
-              <span className="text-slate-900">{markerPosition.lat.toFixed(6)}</span>
-            </div>
-            <div>
-              <span className="font-medium text-slate-700">Longitude: </span>
-              <span className="text-slate-900">{markerPosition.lng.toFixed(6)}</span>
-            </div>
-            {selectedAddress && (
-              <div className="mt-2 pt-2 border-t border-slate-200">
-                <span className="font-medium text-slate-700">Address: </span>
-                <span className="text-slate-900">{selectedAddress}</span>
-              </div>
-            )}
-          </div>
+      {feedback && (
+        <div className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200/60">
+          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+          <span className="truncate">{feedback}</span>
         </div>
       )}
 
-      {/* Instructions */}
-      <p className="text-sm text-slate-600">
-        Search for an address or click on the map to select a location. Drag the marker to adjust.
-      </p>
-
-      {/* Save Button */}
-      <button
-        type="button"
-        onClick={handleSaveLocation}
-        disabled={!canSave || saving}
-        className={`w-full px-4 py-2 rounded-md font-medium transition-colors ${
-          canSave && !saving
-            ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-            : 'bg-slate-300 text-slate-500 cursor-not-allowed'
-        }`}
-      >
-        {saving ? 'Finding location...' : 'Save Location'}
-      </button>
-
-      {saveFeedback && (
-        <p className={`text-sm ${saveFeedback.startsWith('Location saved') ? 'text-emerald-600 font-medium' : 'text-amber-700'}`}>
-          {saveFeedback}
-        </p>
-      )}
       {error && (
-        <p className="text-xs text-rose-500">{error}</p>
+        <div className="flex items-center gap-1.5 text-xs text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-200">
+          <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+          <span>{error}</span>
+        </div>
       )}
+
+      {/* Interactive OpenStreetMap Leaflet Canvas */}
+      <div className="relative rounded-2xl border border-gray-200/90 overflow-hidden shadow-xs">
+        <div ref={containerRef} className="h-64 sm:h-80 w-full bg-gray-100" />
+
+        {/* Floating Coordinates Tag */}
+        <div className="absolute bottom-2.5 left-2.5 z-[1000] bg-white/95 backdrop-blur-xs px-3 py-1.5 rounded-lg border border-gray-200 shadow-sm text-[11px] font-mono text-gray-700 flex items-center gap-2">
+          <span className="font-bold text-blue-700">GPS Pin:</span>
+          <span>{currentCoords.lat.toFixed(5)}, {currentCoords.lng.toFixed(5)}</span>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between text-[11px] text-gray-500">
+        <span>Click anywhere on the map or drag the blue pin to set the exact property gate entrance.</span>
+        <span className="font-semibold text-gray-700">Powered by OpenStreetMap</span>
+      </div>
     </div>
   );
 }
-

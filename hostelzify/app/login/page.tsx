@@ -67,11 +67,23 @@ export default function LoginPage() {
       setLoading(true);
       setError('');
       const loggedInUser = await login(email, password);
-      if (!loggedInUser?.role) return;
-      if (loggedInUser.roles && loggedInUser.roles.length > 1) {
-        router.replace('/select-role');
+      if (!loggedInUser) return;
+
+      const userRoles: string[] = Array.from(
+        new Set([
+          ...(Array.isArray(loggedInUser.roles) ? loggedInUser.roles : []),
+          ...(Array.isArray(loggedInUser.role)
+            ? loggedInUser.role
+            : loggedInUser.role
+            ? [loggedInUser.role]
+            : []),
+        ])
+      );
+
+      if (userRoles.length > 1) {
+        router.replace('/select-role?prompt=true');
       } else {
-        navigateToRole(loggedInUser.role);
+        navigateToRole(userRoles[0] || loggedInUser.role);
       }
     } catch (err: any) {
       const message =

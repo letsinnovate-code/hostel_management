@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "../contexts/AuthContext";
 import { AlertSocketProvider } from "../contexts/AlertSocketContext";
+import { ThemeProvider } from "../contexts/ThemeContext";
 import ToastContainer from "../components/Toast";
 import ConfirmModal from "../components/ConfirmModal";
 
@@ -35,13 +36,15 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <QueryProvider>
-          <AuthProvider>
-            <AlertSocketProvider>
-              {children}
-              <ToastContainer />
-              <ConfirmModal />
-            </AlertSocketProvider>
-          </AuthProvider>
+          <ThemeProvider>
+            <AuthProvider>
+              <AlertSocketProvider>
+                {children}
+                <ToastContainer />
+                <ConfirmModal />
+              </AlertSocketProvider>
+            </AuthProvider>
+          </ThemeProvider>
         </QueryProvider>
       </body>
     </html>

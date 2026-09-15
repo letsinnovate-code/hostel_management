@@ -12,7 +12,7 @@ const GateEvent = require('../../models/GateEvent');
 const User = require('../../models/User');
 const Hostel = require('../../models/Hostel');
 const { assertOwnsHostel, getOwnerHostelIds, getScopedHostelIds } = require('./ownerHelper');
-const { validateLocation } = require('../../utils/locationValidation');
+const { validateLocation, calculateDistance } = require('../../utils/locationValidation');
 const AttendanceAnalyticsService = require('../../services/attendanceAnalyticsService');
 const AttendanceRepository = require('../../repositories/attendanceRepository');
 
@@ -139,8 +139,154 @@ exports.getStudentLocations = async (req, res) => {
     const query = { role: 'student', hostelId: { $in: scopedHostelIds } };
     if (status) query.status = status;
 
-    const students = await User.find(query).select('name email studentId currentLocation lastLocationUpdate locationPermissionStatus');
-    res.status(200).json({ success: true, data: students });
+    const students = await User.find(query)
+      .populate('roomId', 'roomNumber')
+      .populate('hostelId', 'name address location')
+      .select('name email phone studentId currentLocation lastLocationUpdate locationPermissionStatus roomId hostelId')
+      .lean();
+
+    const results = students.map((s) => {
+      const coord = s.currentLocation?.latitude != null && s.currentLocation?.longitude != null
+        ? { latitude: s.currentLocation.latitude, longitude: s.currentLocation.longitude }
+        : null;
+
+      const hostelCoord = s.hostelId?.address?.coordinates?.latitude != null && s.hostelId?.address?.coordinates?.longitude != null
+        ? { latitude: s.hostelId.address.coordinates.latitude, longitude: s.hostelId.address.coordinates.longitude }
+        : (s.hostelId?.location?.coordinates ? { latitude: s.hostelId.location.coordinates[1], longitude: s.hostelId.location.coordinates[0] } : null);
+
+      let distanceFromHostel = null;
+      let isInside = true;
+
+      if (coord && hostelCoord) {
+        distanceFromHostel = Math.round(calculateDistance(coord, hostelCoord));
+        isInside = distanceFromHostel <= 500;
+      }
+
+      return {
+        _id: s._id,
+        id: s._id,
+        name: s.name,
+        email: s.email,
+        phone: s.phone,
+        studentId: s.studentId,
+        roomNumber: s.roomId?.roomNumber || '—',
+        hostelName: s.hostelId?.name,
+        currentLocation: s.currentLocation,
+        lastLocationUpdate: s.lastLocationUpdate || s.currentLocation?.timestamp,
+        locationPermissionStatus: s.locationPermissionStatus || 'granted',
+        isInside,
+        distanceFromHostel,
+      };
+    });
+
+    res.status(200).json({ success: true, data: results });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+exports.simulateStudentLocation = async (req, res) => {
+  try {
+    const { studentId, latitude, longitude, isInside, accuracy = 10, source = 'simulation' } = req.body;
+    if (!studentId || latitude == null || longitude == null) {
+      return res.status(400).json({ success: false, message: 'studentId, latitude, and longitude are required' });
+    }
+
+    const student = await User.findById(studentId);
+    if (!student || student.role !== 'student') {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    // Security: check owner owns student's hostel
+    if (student.hostelId) {
+      await assertOwnsHostel(req, student.hostelId);
+    }
+
+    const now = new Date();
+    const hostel = student.hostelId ? await Hostel.findById(student.hostelId).select('name address location').lean() : null;
+    const hostelCoord = hostel?.address?.coordinates?.latitude != null && hostel?.address?.coordinates?.longitude != null
+      ? { latitude: hostel.address.coordinates.latitude, longitude: hostel.address.coordinates.longitude }
+      : (hostel?.location?.coordinates ? { latitude: hostel.location.coordinates[1], longitude: hostel.location.coordinates[0] } : null);
+
+    let computedDistance = null;
+    if (hostelCoord) {
+      computedDistance = Math.round(calculateDistance({ latitude: Number(latitude), longitude: Number(longitude) }, hostelCoord));
+    }
+
+    const effectiveIsInside = isInside !== undefined
+      ? Boolean(isInside)
+      : (computedDistance != null ? computedDistance <= 500 : true);
+
+    student.currentLocation = {
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      accuracy: Number(accuracy),
+      timestamp: now,
+    };
+    student.lastLocationUpdate = now;
+    student.locationPermissionStatus = 'granted';
+    await student.save();
+
+    if (student.hostelId) {
+      await StudentLocation.create({
+        studentId: student._id,
+        hostelId: student.hostelId,
+        location: { latitude: Number(latitude), longitude: Number(longitude) },
+        isInsideHostel: effectiveIsInside,
+        distanceFromHostel: computedDistance,
+        accuracy: Number(accuracy),
+        source,
+      }).catch((err) => console.warn('StudentLocation simulation log error:', err?.message));
+
+      await GateEvent.create({
+        studentId: student._id,
+        hostelId: student.hostelId,
+        eventType: effectiveIsInside ? 'check_in' : 'check_out',
+        method: 'geofence',
+        timestamp: now,
+        location: { latitude: Number(latitude), longitude: Number(longitude) },
+        metadata: { simulated: true, distanceFromHostel: computedDistance },
+      }).catch((err) => console.warn('GateEvent create error:', err?.message));
+
+      const startOfDay = new Date(now);
+      startOfDay.setHours(0, 0, 0, 0);
+
+      let attendance = await Attendance.findOne({
+        studentId: student._id,
+        date: startOfDay,
+      }).sort({ createdAt: -1 });
+
+      if (!attendance) {
+        await Attendance.create({
+          studentId: student._id,
+          hostelId: student.hostelId,
+          date: startOfDay,
+          status: effectiveIsInside ? 'inside' : 'outside',
+          checkInTime: effectiveIsInside ? now : null,
+          checkOutTime: !effectiveIsInside ? now : null,
+        });
+      } else {
+        attendance.status = effectiveIsInside ? 'inside' : 'outside';
+        if (effectiveIsInside) {
+          attendance.checkInTime = attendance.checkInTime || now;
+        } else {
+          attendance.checkOutTime = now;
+        }
+        await attendance.save();
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Simulated student location: ${effectiveIsInside ? 'Inside' : 'Outside'} hostel (${computedDistance != null ? computedDistance + 'm away' : 'GPS fix'})`,
+      data: {
+        studentId: student._id,
+        name: student.name,
+        currentLocation: student.currentLocation,
+        isInside: effectiveIsInside,
+        distanceFromHostel: computedDistance,
+      },
+    });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
